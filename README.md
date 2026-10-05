@@ -6,6 +6,8 @@ ThreatSieve is a TypeScript-first intelligence pipeline and analyst workspace bu
 
 ![ThreatSieve operations workspace with explicitly labelled demonstration intelligence](docs/images/operations.png)
 
+[View the complete screenshot gallery](#screenshots).
+
 ## Run locally
 
 Requirements: Node.js 22.22.3+ (22.x) or 24.8+, pnpm 10, and a Cloudflare account with Workers AI access for live classification.
@@ -72,6 +74,40 @@ Commercial readiness still requires a deployment-specific review: provider redis
 ## Design constraints
 
 Models select existing candidates and cannot create intelligence entities. An ATT&CK relationship from malware to a technique is a candidate, not proof that an indicator exhibited that behaviour. Actor similarity is not attribution. Private telemetry is tenant-scoped. Exports omit non-redistributable evidence by default. All remediation actions are recommendations.
+
+## Screenshots
+
+Captured from the running application with the labelled synthetic demo dataset. These images show the desktop workspace and responsive mobile layout; displayed probabilities are demonstration values.
+
+### Investigation, evidence and intelligence graph
+
+![Investigation showing model probabilities, evidence provenance, the intelligence graph and analyst decisions](docs/images/investigation.png)
+
+### Bulk analysis
+
+![Bulk analysis with pasted indicators and CSV, JSON or STIX file upload](docs/images/bulk.png)
+
+### Intelligence sources
+
+![Intelligence sources with sync controls, feed status and redistribution information](docs/images/sources.png)
+
+### Emerging clusters
+
+![Unknown threat cluster with source-backed observable membership and no forced actor attribution](docs/images/clusters.png)
+
+### Customer environment
+
+![Customer technology profile used to calculate threat relevance](docs/images/inventory.png)
+
+### Workspace sign-in
+
+![Workspace sign-in exchanging an API key for an expiring session](docs/images/sign-in.png)
+
+### Mobile operations and navigation
+
+| Threat operations                                                                                                                            | Navigation drawer                                                                                                                |
+| -------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------- |
+| <img src="docs/images/operations-mobile.png" width="320" alt="Mobile threat operations with priority intelligence and the observable queue"> | <img src="docs/images/mobile-navigation.png" width="320" alt="Mobile navigation drawer extending to the bottom of the viewport"> |
 
 ## Documentation
 
