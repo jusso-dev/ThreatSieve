@@ -160,10 +160,12 @@ small {
   padding: 8px;
 }
 .app-shell {
+  background: #172322;
   display: flex;
   min-height: 100dvh;
 }
 .sidebar {
+  overflow-y: auto;
   width: 230px;
   background: #172322;
   color: #afbbb7;
@@ -317,6 +319,7 @@ small {
   font-size: 10px;
 }
 .main-shell {
+  background: var(--background);
   margin-left: 230px;
   min-width: 0;
   flex: 1;
@@ -1747,5 +1750,55 @@ h1 {
     animation: none !important;
     transition: none !important;
     scroll-behavior: auto !important;
+  }
+}
+
+/* The fixed controls sit on a document-height rail, including full-page captures. */
+.sidebar > * {
+  flex-shrink: 0;
+}
+dialog.modal {
+  border: 0;
+  margin: auto;
+  max-height: calc(100dvh - 40px);
+  overflow-y: auto;
+  color: var(--foreground);
+}
+dialog.modal::backdrop {
+  background: #0d1c2580;
+  backdrop-filter: blur(3px);
+}
+.sidebar-close,
+.nav-backdrop {
+  display: none;
+}
+@media (max-width: 680px) {
+  .sidebar {
+    visibility: hidden;
+  }
+  .sidebar-open {
+    visibility: visible;
+  }
+  .sidebar-close {
+    display: block;
+    position: absolute;
+    right: 10px;
+    top: 9px;
+    border: 0;
+    background: transparent;
+    color: #afbbb7;
+    padding: 8px;
+  }
+  .nav-backdrop {
+    display: block;
+    position: fixed;
+    inset: 0;
+    border: 0;
+    background: #0d1c2580;
+    z-index: 29;
+  }
+  .table-footer {
+    gap: 12px;
+    flex-wrap: wrap;
   }
 }

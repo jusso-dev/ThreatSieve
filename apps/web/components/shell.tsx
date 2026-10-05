@@ -37,6 +37,8 @@ export function Shell({ children }: { children: React.ReactNode }) {
   const [searchError, setSearchError] = useState("");
   const [open, setOpen] = useState(false);
   const input = useRef<HTMLInputElement>(null);
+  const sidebar = useRef<HTMLElement>(null);
+  const [assessing, setAssessing] = useState(false);
   const me = useApi<{ tenantId: string }>("v1/me");
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {
@@ -49,35 +51,116 @@ export function Shell({ children }: { children: React.ReactNode }) {
     return () => window.removeEventListener("keydown", handler);
   }, []);
   useEffect(() => {
-    if (query.length < 2) return;
+    if (query.length < 2) {
+      setResults([]);
+      return;
+    }
+    const controller = new AbortController();
+    setSearchError("");
+    setResults([]);
     const timer = setTimeout(() => {
       void api<{ data: { id: string; name: string; type: string }[] }>(
         "v1/search?q=" + encodeURIComponent(query),
+        { signal: controller.signal },
       )
         .then((r) => {
-          setResults(r.data);
-          setSearchError("");
+          if (!controller.signal.aborted) setResults(r.data);
         })
-        .catch((e) => setSearchError(String(e)));
+        .catch((e) => {
+          if (!controller.signal.aborted) setSearchError(String(e));
+        });
     }, 250);
-    return () => clearTimeout(timer);
+    return () => {
+      clearTimeout(timer);
+      controller.abort();
+    };
   }, [query]);
+  useEffect(() => {
+    const media = window.matchMedia("(max-width:680px)");
+    const changed = () => {
+      if (!media.matches) setOpen(false);
+    };
+    media.addEventListener("change", changed);
+    return () => media.removeEventListener("change", changed);
+  }, []);
+  useEffect(() => {
+    if (!open) return;
+    const previous = document.activeElement as HTMLElement | null;
+    const overflow = document.body.style.overflow;
+    document.body.style.overflow = "hidden";
+    const nodes = () =>
+      Array.from(
+        sidebar.current!.querySelectorAll<HTMLElement>(
+          'a[href],button:not([disabled]),input:not([disabled]),[tabindex="0"]',
+        ),
+      ).filter((el) => el.getClientRects().length > 0);
+    nodes()[0]?.focus();
+    const key = (event: KeyboardEvent) => {
+      if (event.key === "Escape") {
+        event.preventDefault();
+        setOpen(false);
+      }
+      if (event.key === "Tab") {
+        const targets = nodes();
+        const first = targets[0],
+          last = targets.at(-1);
+        if (event.shiftKey && document.activeElement === first) {
+          event.preventDefault();
+          last?.focus();
+        } else if (!event.shiftKey && document.activeElement === last) {
+          event.preventDefault();
+          first?.focus();
+        }
+      }
+    };
+    document.addEventListener("keydown", key);
+    return () => {
+      document.removeEventListener("keydown", key);
+      document.body.style.overflow = overflow;
+      previous?.focus();
+    };
+  }, [open]);
   if (path === "/sign-in") return children;
   const investigate = async (value: string) => {
-    setQuery("");
+    if (assessing) return;
+    setAssessing(true);
+    setSearchError("");
     try {
       const a = await api<{ assessment_id: string }>("v1/assess", {
         method: "POST",
         body: JSON.stringify({ observable: value }),
       });
+      setQuery("");
       router.push("/investigations/" + a.assessment_id);
     } catch (e) {
       setSearchError(e instanceof Error ? e.message : "Assessment failed");
+    } finally {
+      setAssessing(false);
     }
   };
   return (
     <div className="app-shell">
-      <aside className={"sidebar " + (open ? "sidebar-open" : "")}>
+      {open && (
+        <button
+          className="nav-backdrop"
+          aria-label="Close navigation overlay"
+          onClick={() => setOpen(false)}
+        />
+      )}
+      <aside
+        ref={sidebar}
+        aria-label="Workspace navigation"
+        role={open ? "dialog" : undefined}
+        aria-modal={open ? true : undefined}
+        className={"sidebar " + (open ? "sidebar-open" : "")}
+      >
+        <button
+          className="sidebar-close"
+          aria-label="Close navigation"
+          onClick={() => setOpen(false)}
+        >
+          <X size={18} />
+        </button>
         <Link className="brand" href="/">
           <span className="brand-symbol">
             <ShieldCheck size={23} />
@@ -143,7 +226,7 @@ export function Shell({ children }: { children: React.ReactNode }) {
           </button>
         </div>
       </aside>
-      <div className="main-shell">
+      <div className="main-shell" inert={open}>
         <header className="topbar">
           <button
             aria-label="Toggle navigation"
@@ -183,13 +266,8 @@ export function Shell({ children }: { children: React.ReactNode }) {
                   <button
                     key={r.id}
                     onClick={() => {
-                      if (r.type === "observable") void investigate(r.name);
-                      else {
-                        setQuery("");
-                        router.push(
-                          "/intelligence/" + encodeURIComponent(r.id),
-                        );
-                      }
+                      setQuery("");
+                      router.push("/intelligence/" + encodeURIComponent(r.id));
                     }}
                   >
                     <span>{r.name}</span>
@@ -197,14 +275,22 @@ export function Shell({ children }: { children: React.ReactNode }) {
                     <ArrowUpRight size={14} />
                   </button>
                 ))}
-                <button onClick={() => void investigate(query)}>
+                <button
+                  disabled={assessing}
+                  onClick={() => void investigate(query)}
+                >
                   <Search size={14} />
-                  Assess “{query}”
+                  {assessing ? "Assessing…" : <>Assess “{query}”</>}
                 </button>
-                {searchError && <p>{searchError}</p>}
+                {searchError && <p role="alert">{searchError}</p>}
               </div>
             )}
           </div>
+          {searchError && query.length < 2 && (
+            <p role="alert" className="text-red">
+              {searchError}
+            </p>
+          )}
           <span className="top-status">
             <span className={me.error ? "status-dot warning" : "status-dot"} />
             {me.error ? "Connection issue" : "Workspace connected"}

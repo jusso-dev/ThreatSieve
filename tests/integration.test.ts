@@ -1,4 +1,5 @@
-import { beforeAll, afterAll, describe, it, expect } from "vitest";
+import { beforeAll, afterAll, describe, it, expect, vi } from "vitest";
+import { z } from "zod";
 import { Miniflare } from "miniflare";
 import { readFileSync, readdirSync } from "node:fs";
 import { Repository } from "../packages/database/src/repository";
@@ -14,6 +15,8 @@ import type { Evidence, Principal } from "../packages/schemas/src/index";
 import { queueFeedSync, normalizeFeedChunk } from "../workers/feed-sync/index";
 import { makeJob } from "../workers/ingest/pipeline";
 import type { AppEnv } from "../apps/api/src/env";
+import { submitBulk } from "../workers/ingest/submission";
+import { exportAssessment } from "../workers/export/index";
 let mf: Miniflare;
 let db: D1Database;
 let repo: Repository;
@@ -498,4 +501,333 @@ it("paginates assessments with identical timestamps without omitting records", a
     btoa(JSON.stringify([created_at, first[0]!.assessment_id])),
   );
   expect(second[0]?.assessment_id).toBe("cursor-test-b");
+});
+
+it("deduplicates concurrent upload requests, rejects body conflicts, and scopes keys to tenants", async () => {
+  const archive = await mf.getR2Bucket("ARCHIVE");
+  const inputs = [{ observable: "batch-security.example" }];
+  const results = await Promise.all([
+    submitBulk(db, archive, principal, inputs, "batch-retry", "one"),
+    submitBulk(db, archive, principal, inputs, "batch-retry", "two"),
+  ]);
+  expect(results[0]!.job_id).toBe(results[1]!.job_id);
+  expect(
+    (
+      await db
+        .prepare("SELECT COUNT(*) AS n FROM pipeline_jobs WHERE id=?")
+        .bind(results[0]!.job_id)
+        .first<{ n: number }>()
+    )?.n,
+  ).toBe(1);
+  expect(
+    (
+      await db
+        .prepare(
+          "SELECT COUNT(*) AS n FROM audit_events WHERE entity_id=? AND action='bulk.import'",
+        )
+        .bind(results[0]!.job_id)
+        .first<{ n: number }>()
+    )?.n,
+  ).toBe(1);
+  await expect(
+    submitBulk(
+      db,
+      archive,
+      principal,
+      [{ observable: "different.example" }],
+      "batch-retry",
+      "conflict",
+    ),
+  ).rejects.toMatchObject({ status: 409 });
+  const other = await submitBulk(
+    db,
+    archive,
+    { ...principal, tenantId: "tenant-b" },
+    inputs,
+    "batch-retry",
+    "other",
+  );
+  expect(other.job_id).not.toBe(results[0]!.job_id);
+  const objects = await archive.list({ prefix: "uploads/" });
+  expect(objects.objects.length).toBe(2);
+});
+it("retains unresolved reviews and pages beyond the first 50 tenant assessments", async () => {
+  const base = (await repo.assessments("tenant-a"))[0]!;
+  for (let i = 0; i < 53; i++)
+    await repo.saveAssessment(
+      "tenant-a",
+      {
+        ...base,
+        assessment_id: "review-page-" + i,
+        revision: 0,
+        status: "needs-investigation",
+        human_review: true,
+        created_at: new Date(Date.UTC(2098, 0, 1, 0, 0, i)).toISOString(),
+      },
+      [],
+    );
+  const first = await repo.assessments("tenant-a", 50, undefined, {
+    view: "review",
+    q: "test",
+  });
+  expect(first.length).toBe(50);
+  const last = first.at(-1)!;
+  const second = await repo.assessments(
+    "tenant-a",
+    50,
+    btoa(JSON.stringify([last.created_at, last.assessment_id])),
+    { view: "review", q: "test" },
+  );
+  expect(second.length).toBeGreaterThan(0);
+  expect(new Set([...first, ...second].map((a) => a.assessment_id)).size).toBe(
+    first.length + second.length,
+  );
+  expect(
+    (await repo.assessmentSummary("tenant-a")).summary.review,
+  ).toBeGreaterThanOrEqual(53);
+  expect(
+    await repo.assessments("tenant-b", 50, undefined, { view: "review" }),
+  ).toHaveLength(0);
+  await expect(
+    repo.assessments("tenant-a", 50, "invalid"),
+  ).rejects.toMatchObject({ status: 400 });
+});
+it("exports immutable corrections, synchronizes review metadata and rejects concurrent stale feedback", async () => {
+  const archive = await mf.getR2Bucket("ARCHIVE");
+  const base = (await repo.assessments("tenant-a"))[0]!;
+  const a = {
+    ...base,
+    assessment_id: "export-revision-test",
+    revision: 0,
+    updated_at: undefined,
+    created_at: new Date().toISOString(),
+    status: "pending" as const,
+    effective_classification: undefined,
+  };
+  await repo.saveAssessment("tenant-a", a, []);
+  const first = await exportAssessment(
+    { DB: db, ARCHIVE: archive },
+    "tenant-a",
+    a.assessment_id,
+  );
+  const snapshot = await repo.assessment("tenant-a", a.assessment_id);
+  const read = vi.spyOn(repo, "assessment").mockResolvedValue(snapshot);
+  const edits = await Promise.allSettled([
+    repo.feedback(
+      principal,
+      a.assessment_id,
+      "modified",
+      "malicious",
+      "benign",
+      "Confirmed legitimate infrastructure",
+      "edit-one",
+    ),
+    repo.feedback(
+      principal,
+      a.assessment_id,
+      "modified",
+      "malicious",
+      "suspicious",
+      "Conflicting analyst update",
+      "edit-two",
+    ),
+  ]);
+  read.mockRestore();
+  expect(edits.filter((result) => result.status === "fulfilled")).toHaveLength(
+    1,
+  );
+  expect(edits.filter((result) => result.status === "rejected")).toHaveLength(
+    1,
+  );
+  const corrected = (await repo.assessment("tenant-a", a.assessment_id))!;
+  expect(corrected.revision).toBe(1);
+  await expect(
+    repo.feedback(
+      principal,
+      a.assessment_id,
+      "confirmed",
+      "assessment",
+      undefined,
+      "Stale browser decision",
+      "stale",
+      0,
+    ),
+  ).rejects.toMatchObject({ code: "ASSESSMENT_CHANGED", status: 409 });
+  const second = await exportAssessment(
+    { DB: db, ARCHIVE: archive },
+    "tenant-a",
+    a.assessment_id,
+  );
+  expect(second.id).not.toBe(first.id);
+  expect(
+    await exportAssessment(
+      { DB: db, ARCHIVE: archive },
+      "tenant-a",
+      a.assessment_id,
+    ),
+  ).toEqual(second);
+  const bundle = z
+    .object({
+      objects: z.array(
+        z.object({
+          type: z.string(),
+          x_threatsieve_classification: z
+            .object({ classification: z.string() })
+            .optional(),
+        }),
+      ),
+    })
+    .parse(await (await archive.get(second.r2_key))!.json());
+  expect(
+    bundle.objects.find((o) => o.type === "indicator")
+      ?.x_threatsieve_classification?.classification,
+  ).toBe(corrected.effective_classification);
+  const pending = await repo.queuedMessage(
+    "export:" + a.assessment_id + ":revision:1",
+  );
+  expect(pending?.tenantId).toBe("tenant-a");
+  await repo.feedback(
+    principal,
+    a.assessment_id,
+    "confirmed",
+    "assessment",
+    undefined,
+    "Verified corrected decision",
+    "confirmed",
+  );
+  expect(
+    (
+      await db
+        .prepare(
+          "SELECT human_review FROM assessments WHERE tenant_id=? AND id=?",
+        )
+        .bind("tenant-a", a.assessment_id)
+        .first<{ human_review: number }>()
+    )?.human_review,
+  ).toBe(0);
+  await expect(
+    exportAssessment({ DB: db, ARCHIVE: archive }, "tenant-b", a.assessment_id),
+  ).rejects.toThrow("not found");
+});
+
+it("requires an API key and a trusted browser Origin when creating sessions", async () => {
+  const env = { DB: db, WEB_ORIGIN: "https://web.test" };
+  const rejected = await app.request(
+    "/v1/session",
+    {
+      method: "POST",
+      headers: {
+        Authorization: "Bearer test-only-key",
+        Origin: "https://untrusted.test",
+      },
+    },
+    env,
+  );
+  expect(rejected.status).toBe(403);
+  const permitted = await app.request(
+    "/v1/session",
+    {
+      method: "POST",
+      headers: {
+        Authorization: "Bearer test-only-key",
+        Origin: "https://web.test",
+      },
+    },
+    env,
+  );
+  expect(permitted.status).toBe(200);
+  const cookie = permitted.headers.get("set-cookie")!;
+  expect(cookie).toContain("HttpOnly");
+  expect(cookie).toContain("SameSite=Strict");
+  expect(
+    (
+      await app.request(
+        "/v1/session",
+        {
+          method: "POST",
+          headers: {
+            Cookie: cookie.split(";")[0]!,
+            Origin: "https://web.test",
+          },
+        },
+        env,
+      )
+    ).status,
+  ).toBe(401);
+});
+
+it("excludes tenant-rejected relationships from candidates without changing other tenants' intelligence", async () => {
+  const observable = await normalise("c2.example.test");
+  const before = await buildEvidenceBundle(repo, "tenant-a", observable.id);
+  const technique = before.attackCandidates.find(
+    (c) => c.externalId === "T1071.001",
+  )!;
+  const relation = before.relationships.find(
+    (r) => r.targetEntityId === technique.id,
+  )!;
+  await repo.db
+    .prepare("INSERT INTO classification_cache VALUES(?,?,?,?)")
+    .bind("tenant-a", "reject-test-cache", "unused", new Date().toISOString())
+    .run();
+  const response = await app.request(
+    "/v1/relationships/" + relation.id + "/reject",
+    {
+      method: "POST",
+      headers: {
+        Authorization: "Bearer test-only-key",
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        reason: "Source relationship does not apply to this investigation",
+      }),
+    },
+    { DB: db, WEB_ORIGIN: "https://web.test" },
+  );
+  expect(response.status).toBe(200);
+  const after = await buildEvidenceBundle(repo, "tenant-a", observable.id);
+  expect(after.attackCandidates.some((c) => c.id === technique.id)).toBe(false);
+  expect(after.evidenceVersion).not.toBe(before.evidenceVersion);
+  expect(
+    (
+      await buildEvidenceBundle(repo, "tenant-b", observable.id)
+    ).attackCandidates.some((c) => c.id === technique.id),
+  ).toBe(true);
+  expect(
+    await repo.db
+      .prepare("SELECT cache_key FROM classification_cache WHERE tenant_id=?")
+      .bind("tenant-a")
+      .first(),
+  ).toBeNull();
+});
+
+it("does not include hidden neighboring observables or their edges in another tenant's evidence bundle", async () => {
+  const observable = await normalise("c2.example.test");
+  const privateObservable = await normalise("private-customer.test");
+  const now = new Date().toISOString();
+  await repo.putRelationship({
+    id: "private-neighbor-edge",
+    sourceEntityId: observable.id,
+    targetEntityId: privateObservable.id,
+    relationshipType: "resolves-to",
+    assertionType: "source_claimed",
+    confidence: 0.9,
+    sourceIds: ["mitre"],
+    provenance,
+    createdAt: now,
+    updatedAt: now,
+  });
+  const owner = await buildEvidenceBundle(repo, "tenant-a", observable.id);
+  expect(
+    owner.relationships.some((r) => r.id === "private-neighbor-edge"),
+  ).toBe(true);
+  expect(
+    (await repo.edges(observable.id, 80, "tenant-b")).some(
+      (r) => r.id === "private-neighbor-edge",
+    ),
+  ).toBe(false);
+  const other = await buildEvidenceBundle(repo, "tenant-b", observable.id);
+  expect(JSON.stringify(other)).not.toContain(privateObservable.id);
+  await expect(
+    buildEvidenceBundle(repo, "tenant-b", privateObservable.id),
+  ).rejects.toMatchObject({ status: 404 });
 });

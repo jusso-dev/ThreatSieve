@@ -52,19 +52,32 @@ export function exportStix(
   a: Assessment,
   options: { includeRestricted: boolean } = { includeRestricted: false },
 ): StixBundle {
-  const now = a.created_at;
+  const now = a.updated_at ?? a.created_at;
+  const classification =
+    a.effective_classification ?? a.malicious.classification;
+  const decision = a.effective_classification
+    ? { classification, assertion_type: "analyst_confirmed" }
+    : { ...a.malicious, assertion_type: "model_inferred" };
+  const effectiveRole = a.effective_role
+    ? { value: a.effective_role, assertion_type: "analyst_confirmed" }
+    : a.role;
   const sources = a.sources.filter(
     (s) => options.includeRestricted || s.redistributable,
   );
   const allowed = new Set(sources.map((s) => s.sourceId));
-  const evidence = a.evidence.filter((e) => allowed.has(e.sourceId));
+  const evidence = a.evidence.filter(
+    (e) =>
+      allowed.has(e.sourceId) &&
+      (options.includeRestricted || e.provenance.redistributable === true),
+  );
   const permittedIds = new Set(evidence.map((e) => e.id));
   const base = {
     spec_version: "2.1",
-    created: now,
+    created: a.created_at,
     modified: now,
     confidence: Math.round(a.confidence * 100),
     x_threatsieve_assessment_id: a.assessment_id,
+    x_threatsieve_revision: a.revision ?? 0,
     x_threatsieve_demo: a.demo,
   };
   const objects: StixObject[] = [];
@@ -92,11 +105,14 @@ export function exportStix(
       pattern: expression,
       valid_from: now,
       indicator_types: [
-        a.malicious.classification === "malicious"
+        classification === "malicious"
           ? "malicious-activity"
-          : "anomalous-activity",
+          : classification === "benign"
+            ? "benign"
+            : "anomalous-activity",
       ],
-      x_threatsieve_classification: a.malicious,
+      x_threatsieve_classification: decision,
+      x_threatsieve_model_classification: a.malicious,
       external_references,
     });
   else if (a.observable.type === "cve")
@@ -137,7 +153,9 @@ export function exportStix(
       object_refs: [scoId],
     });
   }
-  for (const mapping of a.attack) {
+  for (const mapping of a.attack.filter(
+    (m) => !a.effective_attack || a.effective_attack.includes(m.techniqueId),
+  )) {
     const ids = mapping.evidenceIds.filter((id) => permittedIds.has(id));
     if (!ids.length) continue;
     const id = stixId("attack-pattern", mapping.techniqueId);
@@ -194,16 +212,28 @@ export function exportStix(
     ...base,
     abstract: "ThreatSieve evidence-backed assessment",
     content: JSON.stringify({
-      classification: a.malicious,
-      analyst_decision: a.analyst_decision,
+      classification: decision,
+      analyst_decision: options.includeRestricted
+        ? a.analyst_decision
+        : a.analyst_decision && {
+            field: a.analyst_decision.field,
+            value: a.analyst_decision.value,
+            createdAt: a.analyst_decision.createdAt,
+          },
       effective_classification: a.effective_classification,
-      role: a.role,
+      role: effectiveRole,
+      analyst_attack_selections: a.effective_attack,
+      analyst_actor_selections: a.effective_actors,
       review: a.human_review,
       reason_codes: a.reason_codes,
       evidence,
       model: a.models,
       actor_associations: a.actors
-        .filter((actor) => actor.evidenceIds.some((id) => permittedIds.has(id)))
+        .filter(
+          (actor) =>
+            (!a.effective_actors || a.effective_actors.includes(actor.id)) &&
+            actor.evidenceIds.some((id) => permittedIds.has(id)),
+        )
         .map((actor) => ({
           ...actor,
           evidenceIds: actor.evidenceIds.filter((id) => permittedIds.has(id)),
@@ -214,5 +244,9 @@ export function exportStix(
     object_refs: [rootId],
     x_threatsieve_assertion_type: "model_inferred",
   });
-  return { type: "bundle", id: stixId("bundle", a.assessment_id), objects };
+  return {
+    type: "bundle",
+    id: stixId("bundle", a.assessment_id + ":" + (a.revision ?? 0)),
+    objects,
+  };
 }

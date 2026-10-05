@@ -1,13 +1,13 @@
 "use client";
-import { useEffect, useState, useCallback } from "react";
+import { useEffect, useState, useCallback, useRef } from "react";
 export async function api<T>(path: string, init?: RequestInit): Promise<T> {
+  const headers = new Headers(init?.headers);
+  if (init?.body && !headers.has("Content-Type"))
+    headers.set("Content-Type", "application/json");
   const response = await fetch("/api/" + path.replace(/^\//, ""), {
     credentials: "same-origin",
     ...init,
-    headers: {
-      ...(init?.body ? { "Content-Type": "application/json" } : {}),
-      ...init?.headers,
-    },
+    headers,
   });
   if (response.status === 401) {
     if (
@@ -17,7 +17,16 @@ export async function api<T>(path: string, init?: RequestInit): Promise<T> {
       window.location.assign("/sign-in");
     throw new Error("Sign in to your workspace");
   }
-  const body: unknown = await response.json();
+  let body: unknown;
+  try {
+    body = await response.json();
+  } catch {
+    throw new Error(
+      response.ok
+        ? "The API returned an invalid response"
+        : "Request failed (" + response.status + "). Please retry.",
+    );
+  }
   if (!response.ok) {
     const error = body as { error?: { message?: string } };
     throw new Error(error.error?.message ?? "Request failed");
@@ -25,21 +34,42 @@ export async function api<T>(path: string, init?: RequestInit): Promise<T> {
   return body as T;
 }
 export function useApi<T>(path: string) {
-  const [data, setData] = useState<T>();
-  const [error, setError] = useState<string>();
-  const [loading, setLoading] = useState(true);
-  const reload = useCallback(() => {
-    setLoading(true);
-    return api<T>(path)
-      .then((d) => {
-        setData(d);
-        setError(undefined);
-      })
-      .catch((e) => setError(e instanceof Error ? e.message : "Request failed"))
-      .finally(() => setLoading(false));
+  const [state, setState] = useState<{
+    path: string;
+    data?: T;
+    error?: string;
+    loading: boolean;
+  }>({ path, loading: true });
+  const controller = useRef<AbortController | null>(null);
+  const reload = useCallback(async () => {
+    controller.current?.abort();
+    const request = new AbortController();
+    controller.current = request;
+    setState((previous) => ({
+      path,
+      data: previous.path === path ? previous.data : undefined,
+      loading: true,
+    }));
+    try {
+      const data = await api<T>(path, { signal: request.signal });
+      if (!request.signal.aborted) setState({ path, data, loading: false });
+    } catch (error) {
+      if (!request.signal.aborted)
+        setState({
+          path,
+          error: error instanceof Error ? error.message : "Request failed",
+          loading: false,
+        });
+    }
   }, [path]);
   useEffect(() => {
     void reload();
+    return () => controller.current?.abort();
   }, [reload]);
-  return { data, error, loading, reload };
+  return {
+    ...(state.path === path
+      ? state
+      : { loading: true, data: undefined, error: undefined }),
+    reload,
+  };
 }

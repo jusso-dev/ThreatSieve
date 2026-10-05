@@ -16,7 +16,7 @@ erDiagram
   entities ||--o{ relationships : relates
   assessments ||--o{ classification_runs : reproduces
   assessments ||--o{ analyst_feedback : improves
-  assessments ||--o{ exports : serializes
+  assessments ||--o{ assessment_exports : versions
   pipeline_jobs ||--o| outbox : dispatches
 ```
 
@@ -31,3 +31,5 @@ Evidence payloads are queryable JSON with an R2 raw-object reference. Arrays are
 Customer technology profiles, assets and observations are tenant-specific. Explicit sharing consent is recorded on observations for future privacy-safe aggregation. No private evidence is copied into the global evidence table by the observation API.
 
 Audit events record actor, tenant, action, correlation, time and structured data. API key hashes are SHA-256 of cryptographically random high-entropy tokens. Raw keys are returned once at creation; web sessions use separately generated expiring opaque tokens.
+
+Migration `0005_review_and_exports.sql` adds an optimistic-concurrency revision to assessments and an immutable `assessment_exports` table keyed by tenant, assessment and revision. Existing export rows are copied without changing their IDs, cursor timestamps or archive paths; the legacy table is retained. Feedback, audit and export outbox insertion commit atomically, so a conflicting update cannot leave a partial decision history.

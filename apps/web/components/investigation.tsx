@@ -19,6 +19,7 @@ import {
 import { api, useApi } from "@/lib/api";
 import { percent, relativeTime } from "@/lib/utils";
 import { DataState } from "./shell";
+import { Modal } from "./ui/modal";
 import { Button } from "./ui/button";
 import { Severity } from "./operations";
 import type {
@@ -35,18 +36,25 @@ export function Investigation({ id }: { id: string }) {
   } = useApi<Assessment>("v1/assessments/" + id);
   const [feedback, setFeedback] = useState("");
   const [reason, setReason] = useState("");
+  const [feedbackError, setFeedbackError] = useState("");
   const [override, setOverride] = useState("unknown");
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState("");
   if (loading || error || !a)
     return <DataState loading={loading} error={error} />;
+  const beginFeedback = (action: string) => {
+    setFeedbackError("");
+    setFeedback(action);
+  };
   const save = async () => {
     setBusy(true);
+    setFeedbackError("");
     try {
       await api("v1/assessments/" + id + "/" + feedback, {
         method: "POST",
         body: JSON.stringify({
           reason,
+          expected_revision: a.revision ?? 0,
           ...(feedback === "modify"
             ? { field: "malicious", value: override }
             : {}),
@@ -57,7 +65,7 @@ export function Investigation({ id }: { id: string }) {
       setMessage("Analyst decision saved with an audit record.");
       await reload();
     } catch (e) {
-      setMessage(e instanceof Error ? e.message : "Feedback failed");
+      setFeedbackError(e instanceof Error ? e.message : "Feedback failed");
     } finally {
       setBusy(false);
     }
@@ -77,17 +85,24 @@ export function Investigation({ id }: { id: string }) {
           <div className="investigation-meta">
             <span
               className={
-                a.malicious.classification === "malicious"
+                (a.effective_classification ?? a.malicious.classification) ===
+                "malicious"
                   ? "text-red"
                   : "text-amber"
               }
             >
-              {a.malicious.classification.toUpperCase()}{" "}
-              {percent(a.malicious.probability)}
+              {(
+                a.effective_classification ?? a.malicious.classification
+              ).toUpperCase()}{" "}
+              {a.effective_classification
+                ? "· analyst decision"
+                : percent(a.malicious.probability)}
             </span>
             <span>·</span>
             <span>
-              {a.role.value === "c2" ? "Command & control" : a.role.value}
+              {(a.effective_role ?? a.role.value) === "c2"
+                ? "Command & control"
+                : (a.effective_role ?? a.role.value)}
             </span>
             <span>·</span>
             <span>{percent(a.confidence)} confidence</span>
@@ -143,7 +158,7 @@ export function Investigation({ id }: { id: string }) {
           <section className="panel">
             <h2>
               <ShieldCheck size={17} />
-              Decision
+              Original model decision
             </h2>
             <div className="decision-layout">
               <div>
@@ -415,14 +430,14 @@ export function Investigation({ id }: { id: string }) {
               Review the supporting evidence and record your judgment.
             </p>
             <div className="actions">
-              <Button size="sm" onClick={() => setFeedback("confirm")}>
+              <Button size="sm" onClick={() => beginFeedback("confirm")}>
                 <Check size={14} />
                 Confirm
               </Button>
               <Button
                 variant="outline"
                 size="sm"
-                onClick={() => setFeedback("reject")}
+                onClick={() => beginFeedback("reject")}
               >
                 <X size={14} />
                 Reject
@@ -432,14 +447,14 @@ export function Investigation({ id }: { id: string }) {
               size="sm"
               variant="outline"
               style={{ marginTop: 8 }}
-              onClick={() => setFeedback("modify")}
+              onClick={() => beginFeedback("modify")}
             >
               Modify classification
             </Button>
             <Button
               size="sm"
               variant="ghost"
-              onClick={() => setFeedback("investigate")}
+              onClick={() => beginFeedback("investigate")}
               style={{ marginTop: 8 }}
             >
               Needs investigation
@@ -448,69 +463,83 @@ export function Investigation({ id }: { id: string }) {
         </aside>
       </div>
       {feedback && (
-        <div className="modal-backdrop">
-          <section
-            className="modal"
-            role="dialog"
-            aria-modal="true"
-            aria-labelledby="feedback-title"
-          >
-            <h2 id="feedback-title">Record analyst decision</h2>
-            <p>
-              {feedback === "confirm"
-                ? "Confirm"
-                : feedback === "reject"
-                  ? "Reject"
+        <Modal
+          titleId="feedback-title"
+          busy={busy}
+          onClose={() => setFeedback("")}
+        >
+          <h2 id="feedback-title">Record analyst decision</h2>
+          <p>
+            {feedback === "confirm"
+              ? "Confirm"
+              : feedback === "reject"
+                ? "Reject"
+                : feedback === "modify"
+                  ? "Modify"
                   : "Investigate"}{" "}
-              this assessment. Your reasoning is retained in the audit trail.
-            </p>
-            <form
-              onSubmit={(e) => {
-                e.preventDefault();
-                void save();
-              }}
-            >
-              {feedback === "modify" && (
-                <>
-                  <label htmlFor="override">Classification</label>
-                  <select
-                    id="override"
-                    value={override}
-                    onChange={(e) => setOverride(e.target.value)}
-                  >
-                    {["malicious", "suspicious", "benign", "unknown"].map(
-                      (v) => (
-                        <option key={v}>{v}</option>
-                      ),
-                    )}
-                  </select>
-                </>
-              )}
-              <label htmlFor="feedback">Reason</label>
-              <textarea
-                id="feedback"
-                autoFocus
-                required
-                minLength={3}
-                value={reason}
-                onChange={(e) => setReason(e.target.value)}
-                rows={4}
-              />
-              <div className="modal-actions">
+            this assessment. Your reasoning is retained in the audit trail.
+          </p>
+          <form
+            onSubmit={(e) => {
+              e.preventDefault();
+              void save();
+            }}
+          >
+            {feedback === "modify" && (
+              <>
+                <label htmlFor="override">Classification</label>
+                <select
+                  id="override"
+                  value={override}
+                  onChange={(e) => setOverride(e.target.value)}
+                >
+                  {["malicious", "suspicious", "benign", "unknown"].map((v) => (
+                    <option key={v}>{v}</option>
+                  ))}
+                </select>
+              </>
+            )}
+            <label htmlFor="feedback">Reason</label>
+            <textarea
+              id="feedback"
+              autoFocus
+              required
+              minLength={3}
+              maxLength={2000}
+              value={reason}
+              onChange={(e) => setReason(e.target.value)}
+              rows={4}
+            />
+            {feedbackError && (
+              <div role="alert" className="notice text-red">
+                <p>{feedbackError}</p>
                 <Button
                   type="button"
                   variant="outline"
-                  onClick={() => setFeedback("")}
+                  disabled={busy}
+                  onClick={() => {
+                    setFeedback("");
+                    void reload();
+                  }}
                 >
-                  Cancel
-                </Button>
-                <Button disabled={busy}>
-                  {busy ? "Saving…" : "Save decision"}
+                  Reload assessment
                 </Button>
               </div>
-            </form>
-          </section>
-        </div>
+            )}
+            <div className="modal-actions">
+              <Button
+                type="button"
+                variant="outline"
+                onClick={() => setFeedback("")}
+              >
+                Cancel
+              </Button>
+              <Button disabled={busy}>
+                {busy ? "Saving…" : "Save decision"}
+              </Button>
+            </div>
+          </form>
+        </Modal>
       )}
     </>
   );

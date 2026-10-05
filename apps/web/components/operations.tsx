@@ -1,6 +1,6 @@
 "use client";
 import Link from "next/link";
-import { useState, useMemo } from "react";
+import { useState, useEffect } from "react";
 import { useRouter } from "next/navigation";
 import {
   ArrowUpRight,
@@ -25,6 +25,7 @@ import {
 } from "@tanstack/react-table";
 import { useApi, api } from "@/lib/api";
 import { percent, relativeTime } from "@/lib/utils";
+import { Modal } from "./ui/modal";
 import { Button } from "./ui/button";
 import { PageHeader, DataState } from "./shell";
 import type { Assessment } from "../../../packages/schemas/src/index";
@@ -37,44 +38,57 @@ export function Severity({ value }: { value: string }) {
   );
 }
 export function Operations() {
-  const { data, error, loading, reload } = useApi<{ data: Assessment[] }>(
-    "v1/assessments",
-  );
-  const [filter, setFilter] = useState("attention");
+  const [filter, setFilterValue] = useState("attention");
   const [search, setSearch] = useState("");
+  const [query, setQuery] = useState("");
+  const [cursor, setCursor] = useState("");
+  const [history, setHistory] = useState<string[]>([]);
+  const setFilter = (value: string) => {
+    setFilterValue(value);
+    setCursor("");
+    setHistory([]);
+  };
+  useEffect(() => {
+    const timer = setTimeout(() => {
+      setQuery(search);
+      setCursor("");
+      setHistory([]);
+    }, 250);
+    return () => clearTimeout(timer);
+  }, [search]);
+  const params = new URLSearchParams({
+    view: filter,
+    q: query,
+    limit: "50",
+    ...(cursor ? { cursor } : {}),
+  });
+  const { data, error, loading, reload } = useApi<{
+    data: Assessment[];
+    next_cursor: string | null;
+    summary: {
+      total: number;
+      attention: number;
+      critical: number;
+      high: number;
+      review: number;
+    };
+    priority: Assessment[];
+  }>("v1/assessments?" + params.toString());
   const [observable, setObservable] = useState("");
   const [showAssess, setShowAssess] = useState(false);
   const [busy, setBusy] = useState(false);
   const [assessError, setAssessError] = useState("");
   const router = useRouter();
   const all = data?.data ?? [];
-  const attention = all.filter(
-    (a) =>
-      a.status === "pending" &&
-      (a.effective_classification ?? a.malicious.classification) !== "benign",
-  );
-  const critical = attention.filter((a) => a.severity === "critical");
-  const high = attention.filter((a) => a.severity === "high");
-  const review = attention.filter((a) => a.human_review);
-  const filtered = useMemo(
-    () =>
-      all.filter(
-        (a) =>
-          (filter === "all" ||
-            (filter === "review" && a.human_review && a.status === "pending") ||
-            (filter === "attention" &&
-              a.status === "pending" &&
-              (a.effective_classification ?? a.malicious.classification) !==
-                "benign")) &&
-          a.observable.normalizedValue
-            .toLowerCase()
-            .includes(search.toLowerCase()),
-      ),
-    [all, filter, search],
-  );
-  const priorities = [...attention]
-    .sort((a, b) => b.customer.relevance - a.customer.relevance)
-    .slice(0, 3);
+  const summary = data?.summary ?? {
+    total: 0,
+    attention: 0,
+    critical: 0,
+    high: 0,
+    review: 0,
+  };
+  const filtered = all;
+  const priorities = data?.priority ?? [];
   const columns: ColumnDef<Assessment>[] = [
     {
       header: "Observable",
@@ -97,9 +111,9 @@ export function Operations() {
             <strong>{row.original.observable.normalizedValue}</strong>
             <small>
               {row.original.observable.type} <span>·</span>{" "}
-              {row.original.role.value === "c2"
+              {(row.original.effective_role ?? row.original.role.value) === "c2"
                 ? "Command & control"
-                : row.original.role.value}
+                : (row.original.effective_role ?? row.original.role.value)}
             </small>
           </span>
         </Link>
@@ -114,9 +128,11 @@ export function Operations() {
       cell: ({ row }) => (
         <span
           className={
-            row.original.malicious.classification === "malicious"
+            (row.original.effective_classification ??
+              row.original.malicious.classification) === "malicious"
               ? "text-red"
-              : row.original.malicious.classification === "benign"
+              : (row.original.effective_classification ??
+                    row.original.malicious.classification) === "benign"
                 ? "text-green"
                 : "text-amber"
           }
@@ -124,7 +140,9 @@ export function Operations() {
           {row.original.effective_classification ??
             row.original.malicious.classification}{" "}
           <span className="mono muted">
-            {percent(row.original.malicious.probability)}
+            {row.original.effective_classification
+              ? "· analyst"
+              : percent(row.original.malicious.probability)}
           </span>
         </span>
       ),
@@ -231,22 +249,22 @@ export function Operations() {
           className="attention-primary"
         >
           <span>Requires attention</span>
-          <strong>{attention.length.toString().padStart(2, "0")}</strong>
+          <strong>{summary.attention.toString().padStart(2, "0")}</strong>
           <small>Prioritised intelligence</small>
         </button>
         <div>
           <span className="text-red">Critical</span>
-          <strong>{critical.length.toString().padStart(2, "0")}</strong>
+          <strong>{summary.critical.toString().padStart(2, "0")}</strong>
           <small>Immediate investigation</small>
         </div>
         <div>
           <span className="text-amber">High priority</span>
-          <strong>{high.length.toString().padStart(2, "0")}</strong>
+          <strong>{summary.high.toString().padStart(2, "0")}</strong>
           <small>Elevated threat activity</small>
         </div>
         <button onClick={() => setFilter("review")}>
           <span>Analyst review</span>
-          <strong>{review.length.toString().padStart(2, "0")}</strong>
+          <strong>{summary.review.toString().padStart(2, "0")}</strong>
           <small>Human judgment required</small>
         </button>
         <div className="signal-summary">
@@ -255,7 +273,7 @@ export function Operations() {
           </span>
           <p>
             Signal over noise.
-            <small>{all.length} assessments with traceable evidence</small>
+            <small>{summary.total} assessments with traceable evidence</small>
           </p>
         </div>
       </section>
@@ -326,7 +344,7 @@ export function Operations() {
                     onClick={() => setFilter(id!)}
                   >
                     {label}
-                    {id === "attention" && <span>{attention.length}</span>}
+                    {id === "attention" && <span>{summary.attention}</span>}
                   </button>
                 ))}
               </div>
@@ -380,7 +398,33 @@ export function Operations() {
               <DataState empty />
             )}
             <div className="table-footer">
-              <span>{filtered.length} assessments in this view</span>
+              <span>
+                {filtered.length} assessments on page {history.length + 1}
+              </span>
+              <div className="actions">
+                <Button
+                  size="sm"
+                  variant="outline"
+                  disabled={!history.length || loading}
+                  onClick={() => {
+                    setCursor(history.at(-1)!);
+                    setHistory(history.slice(0, -1));
+                  }}
+                >
+                  Previous page
+                </Button>
+                <Button
+                  size="sm"
+                  variant="outline"
+                  disabled={!data?.next_cursor || loading}
+                  onClick={() => {
+                    setHistory([...history, cursor]);
+                    setCursor(data!.next_cursor!);
+                  }}
+                >
+                  Next page
+                </Button>
+              </div>
               <span>
                 <CheckCheck size={13} /> Full provenance retained
               </span>
@@ -400,60 +444,52 @@ export function Operations() {
         </>
       )}
       {showAssess && (
-        <div
-          className="modal-backdrop"
-          role="presentation"
-          onClick={() => !busy && setShowAssess(false)}
+        <Modal
+          titleId="assess-title"
+          busy={busy}
+          onClose={() => setShowAssess(false)}
         >
-          <section
-            className="modal"
-            role="dialog"
-            aria-modal="true"
-            aria-labelledby="assess-title"
-            onClick={(e) => e.stopPropagation()}
+          <h2 id="assess-title">Assess an observable</h2>
+          <p>
+            ThreatSieve will gather existing evidence and classify the supported
+            decisions.
+          </p>
+          <form
+            onSubmit={(e) => {
+              e.preventDefault();
+              void submit();
+            }}
           >
-            <h2 id="assess-title">Assess an observable</h2>
-            <p>
-              ThreatSieve will gather existing evidence and classify the
-              supported decisions.
-            </p>
-            <form
-              onSubmit={(e) => {
-                e.preventDefault();
-                void submit();
-              }}
-            >
-              <label htmlFor="observable">IP, domain, URL, hash or CVE</label>
-              <input
-                id="observable"
-                autoFocus
-                required
-                value={observable}
-                onChange={(e) => setObservable(e.target.value)}
-                placeholder="example.com"
-              />
-              {assessError && (
-                <p role="alert" className="text-red">
-                  {assessError}
-                </p>
-              )}
-              <div className="modal-actions">
-                <Button
-                  type="button"
-                  variant="outline"
-                  disabled={busy}
-                  onClick={() => setShowAssess(false)}
-                >
-                  Cancel
-                </Button>
-                <Button disabled={busy}>
-                  {busy ? "Evaluating evidence…" : "Run assessment"}
-                  <ArrowRight size={15} />
-                </Button>
-              </div>
-            </form>
-          </section>
-        </div>
+            <label htmlFor="observable">IP, domain, URL, hash or CVE</label>
+            <input
+              id="observable"
+              autoFocus
+              required
+              value={observable}
+              onChange={(e) => setObservable(e.target.value)}
+              placeholder="example.com"
+            />
+            {assessError && (
+              <p role="alert" className="text-red">
+                {assessError}
+              </p>
+            )}
+            <div className="modal-actions">
+              <Button
+                type="button"
+                variant="outline"
+                disabled={busy}
+                onClick={() => setShowAssess(false)}
+              >
+                Cancel
+              </Button>
+              <Button disabled={busy}>
+                {busy ? "Evaluating evidence…" : "Run assessment"}
+                <ArrowRight size={15} />
+              </Button>
+            </div>
+          </form>
+        </Modal>
       )}
     </>
   );

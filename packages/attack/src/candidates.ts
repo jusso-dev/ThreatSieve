@@ -13,6 +13,8 @@ export async function buildEvidenceBundle(
   tenantId: string,
   observableId: string,
 ): Promise<EvidenceBundle> {
+  if (!(await repo.visible(tenantId, observableId)))
+    throw new AppError("NOT_FOUND", 404, "Observable not found");
   const observable = await repo.observable(observableId);
   if (!observable) throw new AppError("NOT_FOUND", 404, "Observable not found");
   const evidence = await repo.evidence(observableId, 101);
@@ -36,17 +38,18 @@ export async function buildEvidenceBundle(
   for (let depth = 0; depth < 3 && frontier.length; depth++) {
     const next: string[] = [];
     for (const id of frontier.slice(0, 30)) {
-      const edges = await repo.edges(id, 41);
+      const edges = await repo.edges(id, 41, tenantId);
       if (edges.length > 40) truncated = true;
       for (const edge of edges.slice(0, 40)) {
-        if (!edgeIds.has(edge.id)) {
-          relationships.push(edge);
-          edgeIds.add(edge.id);
-        }
         const target =
           edge.sourceEntityId === id
             ? edge.targetEntityId
             : edge.sourceEntityId;
+        if (!(await repo.visible(tenantId, target))) continue;
+        if (!edgeIds.has(edge.id)) {
+          relationships.push(edge);
+          edgeIds.add(edge.id);
+        }
         if (seen.has(target)) continue;
         seen.add(target);
         const entity = await repo.entity(target);

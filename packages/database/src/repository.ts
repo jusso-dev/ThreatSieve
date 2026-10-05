@@ -18,6 +18,13 @@ import {
 } from "../../schemas/src/index";
 import { aliasKey } from "../../intel/src/normalise";
 import { AppError } from "../../observability/src/index";
+import {
+  assessmentFilter,
+  assessmentCursor,
+  attentionPredicate,
+  reviewPredicate,
+  type AssessmentView,
+} from "./assessment-query";
 export class Repository {
   constructor(readonly db: D1Database) {}
   async observable(id: string) {
@@ -230,12 +237,28 @@ export class Repository {
       )
       .run();
   }
-  async edges(entityId: string, limit = 80) {
+  async edges(entityId: string, limit = 80, tenantId?: string) {
     const r = await this.db
       .prepare(
-        "SELECT data FROM relationships WHERE source_entity_id=? OR target_entity_id=? ORDER BY confidence DESC,id LIMIT ?",
+        `SELECT r.data FROM relationships r
+         JOIN entities src ON src.id=r.source_entity_id
+         JOIN entities dst ON dst.id=r.target_entity_id
+         WHERE (r.source_entity_id=? OR r.target_entity_id=?)
+         AND (? IS NULL OR (
+           (src.public_intel=1 OR EXISTS(SELECT 1 FROM tenant_observables WHERE tenant_id=? AND observable_id=src.id))
+           AND (dst.public_intel=1 OR EXISTS(SELECT 1 FROM tenant_observables WHERE tenant_id=? AND observable_id=dst.id))
+           AND COALESCE((SELECT decision FROM relationship_feedback WHERE tenant_id=? AND relationship_id=r.id ORDER BY created_at DESC,id DESC LIMIT 1),'confirm')!='reject'
+         )) ORDER BY r.confidence DESC,r.id LIMIT ?`,
       )
-      .bind(entityId, entityId, limit)
+      .bind(
+        entityId,
+        entityId,
+        tenantId ?? null,
+        tenantId ?? null,
+        tenantId ?? null,
+        tenantId ?? null,
+        limit,
+      )
       .all<{ data: string }>();
     return r.results.map((x) => RelationshipSchema.parse(JSON.parse(x.data)));
   }
@@ -256,19 +279,59 @@ export class Repository {
       .first<{ data: string }>();
     return row ? (JSON.parse(row.data) as Assessment) : null;
   }
-  async assessments(tenantId: string, limit = 50, cursor?: string) {
-    const [time, id] = cursor
-      ? z
-          .tuple([z.string().datetime(), z.string().min(1)])
-          .parse(JSON.parse(atob(cursor)))
-      : [null, null];
+  async assessments(
+    tenantId: string,
+    limit = 50,
+    cursor?: string,
+    options: { view?: AssessmentView; q?: string } = {},
+  ) {
+    const [time, id] = assessmentCursor(cursor);
+    const q = (options.q ?? "").toLowerCase();
     const rows = await this.db
       .prepare(
-        "SELECT data FROM assessments WHERE tenant_id=? AND (? IS NULL OR created_at<? OR (created_at=? AND id>?)) ORDER BY created_at DESC,id LIMIT ?",
+        "SELECT data FROM assessments WHERE tenant_id=? AND " +
+          assessmentFilter(options.view) +
+          " AND (?='' OR instr(lower(json_extract(data,'$.observable.normalizedValue')),?)>0) AND (? IS NULL OR created_at<? OR (created_at=? AND id>?)) ORDER BY created_at DESC,id LIMIT ?",
       )
-      .bind(tenantId, time, time, time, id, limit)
+      .bind(tenantId, q, q, time, time, time, id, limit)
       .all<{ data: string }>();
-    return rows.results.map((r) => JSON.parse(r.data) as Assessment);
+    return rows.results.map((row) => JSON.parse(row.data) as Assessment);
+  }
+  async assessmentSummary(tenantId: string) {
+    const counts = await this.db
+      .prepare(
+        "SELECT COUNT(*) AS total,COALESCE(SUM(" +
+          attentionPredicate +
+          "),0) AS attention,COALESCE(SUM((" +
+          attentionPredicate +
+          ") AND severity='critical'),0) AS critical,COALESCE(SUM((" +
+          attentionPredicate +
+          ") AND severity='high'),0) AS high,COALESCE(SUM(" +
+          reviewPredicate +
+          "),0) AS review FROM assessments WHERE tenant_id=?",
+      )
+      .bind(tenantId)
+      .first<{
+        total: number;
+        attention: number;
+        critical: number;
+        high: number;
+        review: number;
+      }>();
+    const priority = await this.db
+      .prepare(
+        "SELECT data FROM assessments WHERE tenant_id=? AND " +
+          attentionPredicate +
+          " ORDER BY json_extract(data,'$.customer.relevance') DESC,created_at DESC,id LIMIT 3",
+      )
+      .bind(tenantId)
+      .all<{ data: string }>();
+    return {
+      summary: counts!,
+      priority: priority.results.map(
+        (row) => JSON.parse(row.data) as Assessment,
+      ),
+    };
   }
   async cached(tenantId: string, key: string) {
     const row = await this.db
@@ -283,7 +346,7 @@ export class Repository {
     const statements = [
       this.db
         .prepare(
-          "INSERT OR IGNORE INTO assessments(id,tenant_id,observable_id,evidence_version,status,severity,confidence,human_review,data,created_at) VALUES(?,?,?,?,?,?,?,?,?,?)",
+          "INSERT OR IGNORE INTO assessments(id,tenant_id,observable_id,evidence_version,status,severity,confidence,human_review,data,created_at,revision) VALUES(?,?,?,?,?,?,?,?,?,?,?)",
         )
         .bind(
           a.assessment_id,
@@ -296,6 +359,7 @@ export class Repository {
           Number(a.human_review),
           JSON.stringify(a),
           a.created_at,
+          a.revision ?? 0,
         ),
       ...cacheKeys.map((key) =>
         this.db
@@ -356,13 +420,16 @@ export class Repository {
       );
     await this.db.batch(statements);
   }
-  jobStatements(job: PipelineJob) {
+  jobStatements(
+    job: PipelineJob,
+    gate: { feedbackId?: string; requestKey?: string } = {},
+  ) {
     const queue =
       job.stage === "feed-sync" || job.stage === "bulk" ? "ingest" : job.stage;
     return [
       this.db
         .prepare(
-          "INSERT OR IGNORE INTO pipeline_jobs(id,tenant_id,entity_id,stage,status,data,created_at,updated_at) VALUES(?,?,?,?,'queued',?,?,?)",
+          "INSERT OR IGNORE INTO pipeline_jobs(id,tenant_id,entity_id,stage,status,data,created_at,updated_at) SELECT ?,?,?,?,'queued',?,?,? WHERE (? IS NULL OR EXISTS(SELECT 1 FROM analyst_feedback WHERE id=?)) AND (? IS NULL OR EXISTS(SELECT 1 FROM request_idempotency WHERE tenant_id=? AND request_key=? AND job_id=?))",
         )
         .bind(
           job.jobId,
@@ -372,12 +439,29 @@ export class Repository {
           JSON.stringify(job),
           job.createdAt,
           job.createdAt,
+          gate.feedbackId ?? null,
+          gate.feedbackId ?? null,
+          gate.requestKey ?? null,
+          job.tenantId ?? null,
+          gate.requestKey ?? null,
+          job.jobId,
         ),
       this.db
         .prepare(
-          "INSERT OR IGNORE INTO outbox(id,queue,data,created_at) VALUES(?,?,?,?)",
+          "INSERT OR IGNORE INTO outbox(id,queue,data,created_at) SELECT ?,?,?,? WHERE (? IS NULL OR EXISTS(SELECT 1 FROM analyst_feedback WHERE id=?)) AND (? IS NULL OR EXISTS(SELECT 1 FROM request_idempotency WHERE tenant_id=? AND request_key=? AND job_id=?))",
         )
-        .bind(job.jobId, queue, JSON.stringify(job), job.createdAt),
+        .bind(
+          job.jobId,
+          queue,
+          JSON.stringify(job),
+          job.createdAt,
+          gate.feedbackId ?? null,
+          gate.feedbackId ?? null,
+          gate.requestKey ?? null,
+          job.tenantId ?? null,
+          gate.requestKey ?? null,
+          job.jobId,
+        ),
     ];
   }
   async enqueue(job: PipelineJob) {
@@ -444,17 +528,35 @@ export class Repository {
     value: unknown,
     reason: string,
     correlationId: string,
+    expectedRevision?: number,
   ) {
     const a = await this.assessment(p.tenantId, id);
     if (!a) throw new AppError("NOT_FOUND", 404, "Assessment not found");
-    const now = new Date().toISOString();
-    const updated: Assessment = { ...a, status: decision };
+    if (
+      expectedRevision !== undefined &&
+      expectedRevision !== (a.revision ?? 0)
+    )
+      throw new AppError(
+        "ASSESSMENT_CHANGED",
+        409,
+        "This assessment has changed. Reload it before saving your decision.",
+      );
+    const now = new Date(
+      Math.max(Date.now(), Date.parse(a.updated_at ?? a.created_at) + 1),
+    ).toISOString();
+    const revision = (a.revision ?? 0) + 1;
+    const updated: Assessment = {
+      ...a,
+      status: decision,
+      revision,
+      updated_at: now,
+    };
     if (decision === "modified") {
       if (field === "malicious")
         updated.effective_classification = z
           .enum(["malicious", "suspicious", "benign", "unknown"])
           .parse(value);
-      else if (field === "role") Role.parse(value);
+      else if (field === "role") updated.effective_role = Role.parse(value);
       else if (field === "attack" || field === "actors") {
         const ids = z.array(z.string()).max(20).parse(value);
         for (const entityId of ids) {
@@ -470,6 +572,14 @@ export class Repository {
               "Analyst selections must reference existing intelligence entities",
             );
         }
+        if (field === "attack")
+          updated.effective_attack = await Promise.all(
+            ids.map(
+              async (entityId) =>
+                (await this.entity(entityId))!.externalId ?? entityId,
+            ),
+          );
+        else updated.effective_actors = ids;
       } else
         throw new AppError(
           "INVALID_OVERRIDE",
@@ -506,11 +616,37 @@ export class Repository {
       attack: a.attack,
       actors: a.actors,
     };
-    await this.db.batch([
+    const feedbackId = crypto.randomUUID();
+    const exportJob: PipelineJob = {
+      jobId: "export:" + id + ":revision:" + revision,
+      tenantId: p.tenantId,
+      entityId: a.observable.id,
+      stage: "export",
+      attempt: 0,
+      createdAt: now,
+      correlationId,
+      payload: { assessmentId: id },
+    };
+    const results = await this.db.batch([
       this.db
-        .prepare("INSERT INTO analyst_feedback VALUES(?,?,?,?,?,?,?,?,?)")
+        .prepare(
+          "UPDATE assessments SET status=?,human_review=?,data=?,revision=? WHERE tenant_id=? AND id=? AND revision=?",
+        )
         .bind(
-          crypto.randomUUID(),
+          decision,
+          Number(updated.human_review),
+          JSON.stringify(updated),
+          revision,
+          p.tenantId,
+          id,
+          a.revision ?? 0,
+        ),
+      this.db
+        .prepare(
+          "INSERT INTO analyst_feedback SELECT ?,?,?,?,?,?,?,?,? WHERE changes()=1",
+        )
+        .bind(
+          feedbackId,
           p.tenantId,
           id,
           p.userId,
@@ -522,16 +658,13 @@ export class Repository {
         ),
       this.db
         .prepare(
-          "UPDATE assessments SET status=?,data=? WHERE tenant_id=? AND id=?",
+          "DELETE FROM classification_cache WHERE tenant_id=? AND assessment_id=? AND EXISTS(SELECT 1 FROM analyst_feedback WHERE id=?)",
         )
-        .bind(decision, JSON.stringify(updated), p.tenantId, id),
+        .bind(p.tenantId, id, feedbackId),
       this.db
         .prepare(
-          "DELETE FROM classification_cache WHERE tenant_id=? AND assessment_id=?",
+          "INSERT INTO audit_events SELECT ?,?,?,?,?,?,?,?,? WHERE EXISTS(SELECT 1 FROM analyst_feedback WHERE id=?)",
         )
-        .bind(p.tenantId, id),
-      this.db
-        .prepare("INSERT INTO audit_events VALUES(?,?,?,?,?,?,?,?,?)")
         .bind(
           crypto.randomUUID(),
           p.tenantId,
@@ -540,10 +673,18 @@ export class Repository {
           id,
           null,
           correlationId,
-          JSON.stringify({ field, reason }),
+          JSON.stringify({ field, reason, revision }),
           now,
+          feedbackId,
         ),
+      ...this.jobStatements(exportJob, { feedbackId }),
     ]);
+    if (!results[0]!.meta.changes)
+      throw new AppError(
+        "ASSESSMENT_CHANGED",
+        409,
+        "Another analyst updated this assessment. Refresh before saving your decision.",
+      );
     return updated;
   }
   async queuedMessage(id: string) {

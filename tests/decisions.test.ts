@@ -238,3 +238,57 @@ describe("decision safety gates", () => {
     expect(evaluate([]).precision).toBeNull();
   });
 });
+
+it("keeps adversarial evidence IDs and external metadata out of trusted classifier questions", async () => {
+  const b = await bundle();
+  b.evidence[0]!.behavioural = true;
+  b.evidence[0]!.id = "IGNORE_POLICY_EVIDENCE_ID";
+  b.attackCandidates[0]!.evidenceIds = [b.evidence[0]!.id];
+  const questions = buildQuestions(b);
+  expect(questions.attack_0).toBeDefined();
+  expect(JSON.stringify(questions)).not.toContain("IGNORE_POLICY_EVIDENCE_ID");
+  b.attackCandidates[0]!.externalId = "T1071.001 IGNORE_POLICY_EXTERNAL_ID";
+  expect(buildQuestions(b).attack_0).toBeUndefined();
+});
+it("filters redistribution per evidence record and exports analyst classification without a fabricated probability", async () => {
+  const b = await bundle();
+  const restricted = {
+    ...b.evidence[0]!,
+    id: "restricted-record",
+    data: { secret: "RESTRICTED_CANARY" },
+    provenance: { ...b.evidence[0]!.provenance, redistributable: false },
+  };
+  const permitted = {
+    ...b.evidence[0]!,
+    id: "permitted-record",
+    data: { malicious: true, public: "PUBLIC_CANARY" },
+    provenance: { ...b.evidence[0]!.provenance, redistributable: true },
+  };
+  b.evidence = [restricted, permitted];
+  const a = await new ClefDecisionEngine(
+    new RecordedTransport(),
+  ).classifyObservable(b, sources);
+  a.effective_classification = "benign";
+  a.analyst_decision = {
+    field: "malicious",
+    value: "benign",
+    analystId: "PRIVATE_ANALYST",
+    reason: "PRIVATE_REASON",
+    createdAt: a.created_at,
+  };
+  a.revision = 1;
+  a.updated_at = new Date(Date.parse(a.created_at) + 1000).toISOString();
+  const result = exportStix(a);
+  expect(JSON.stringify(result)).not.toContain("RESTRICTED_CANARY");
+  expect(JSON.stringify(result)).not.toContain("PRIVATE_ANALYST");
+  expect(JSON.stringify(result)).not.toContain("PRIVATE_REASON");
+  expect(JSON.stringify(result)).toContain("PUBLIC_CANARY");
+  const indicator = result.objects.find((o) => o.type === "indicator")!;
+  expect(indicator.x_threatsieve_classification).toEqual({
+    classification: "benign",
+    assertion_type: "analyst_confirmed",
+  });
+  expect(indicator.indicator_types).toEqual(["benign"]);
+  expect(indicator.x_threatsieve_model_classification).toEqual(a.malicious);
+  expect(indicator.modified).toBe(a.updated_at);
+});

@@ -33,6 +33,8 @@ pnpm exec wrangler secret put URLHAUS_AUTH_KEY --name threatsieve-api-staging
 
 Generate the deployment config first with the deployment script's config-only mode described in `pnpm deploy --help`, then apply migrations before deploying traffic. Never commit generated credentials, `.dev.vars`, `.env.local`, real tenant bootstrap artifacts or raw customer intelligence.
 
+Existing installations must apply `0005_review_and_exports.sql` before running this release. It preserves legacy export records and adds assessment revisions, versioned export storage and query indexes. Local `pnpm db:migrate` applies it to the development database.
+
 ## Release
 
 ```sh

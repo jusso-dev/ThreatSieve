@@ -19,6 +19,7 @@ import {
   rateLimit,
   createApiKey,
 } from "../../../packages/auth/src/index";
+import { AssessmentView } from "../../../packages/database/src/assessment-query";
 import { Repository } from "../../../packages/database/src/repository";
 import {
   AppError,
@@ -39,6 +40,7 @@ import {
   queueFeedSync,
 } from "../../../workers/feed-sync/index";
 import { parseIndicators } from "../../../workers/ingest/upload";
+import { submitBulk } from "../../../workers/ingest/submission";
 import { exportStix } from "../../../packages/stix/src/index";
 
 type Context = {
@@ -123,6 +125,10 @@ app.get("/ready", async (c) => {
   }
 });
 app.post("/v1/session", async (c) => {
+  if (c.req.header("Origin") && c.req.header("Origin") !== c.env.WEB_ORIGIN)
+    throw new AppError("INVALID_ORIGIN", 403, "Request origin is not allowed");
+  if (!c.req.header("Authorization")?.startsWith("Bearer "))
+    throw new AppError("UNAUTHORIZED", 401, "Sign in with an API key");
   const p = await authenticate(c.env.DB, c.req.raw);
   await rateLimit(c.env.DB, p, 10);
   const token = crypto.randomUUID() + crypto.randomUUID();
@@ -249,27 +255,26 @@ app.post("/v1/assess", scope("assessment:write"), async (c) => {
 app.post("/v1/assess/bulk", scope("assessment:write"), async (c) => {
   const body = BulkRequest.parse(await json(c, 16 * 1024 * 1024));
   const p = c.get("principal");
-  const key = "uploads/" + p.tenantId + "/" + crypto.randomUUID() + ".json";
   const inputs = body.observables.map((v) =>
     typeof v === "string" ? { observable: v } : v,
   );
-  await c.env.ARCHIVE.put(key, JSON.stringify(inputs));
-  const job = makeJob("bulk", key, p.tenantId, { key }, c.get("requestId"));
-  const repo = new Repository(c.env.DB);
-  await repo.enqueue(job);
-  await repo.audit(p, "bulk.import", job.jobId, c.get("requestId"), {
-    count: inputs.length,
-  });
-  c.executionCtx.waitUntil(dispatchOutbox(c.env));
-  return c.json(
-    {
-      job_id: job.jobId,
-      submitted: inputs.length,
-      status: "queued",
-      status_url: "/v1/jobs/" + job.jobId,
-    },
-    202,
+  const requestKey = z
+    .string()
+    .trim()
+    .min(1)
+    .max(200)
+    .optional()
+    .parse(c.req.header("Idempotency-Key"));
+  const result = await submitBulk(
+    c.env.DB,
+    c.env.ARCHIVE,
+    p,
+    inputs,
+    requestKey,
+    c.get("requestId"),
   );
+  c.executionCtx.waitUntil(dispatchOutbox(c.env));
+  return c.json({ ...result, status_url: "/v1/jobs/" + result.job_id }, 202);
 });
 app.post("/v1/uploads", scope("assessment:write"), async (c) => {
   const format = z
@@ -282,6 +287,8 @@ app.post("/v1/uploads", scope("assessment:write"), async (c) => {
       format,
     );
   } catch (error) {
+    if (error instanceof Error && error.message.includes("size limit"))
+      throw new AppError("PAYLOAD_TOO_LARGE", 413, "Upload exceeds 16 MiB");
     throw new AppError(
       "INVALID_UPLOAD",
       422,
@@ -289,20 +296,23 @@ app.post("/v1/uploads", scope("assessment:write"), async (c) => {
     );
   }
   const p = c.get("principal");
-  const key = "uploads/" + p.tenantId + "/" + crypto.randomUUID() + ".json";
-  await c.env.ARCHIVE.put(key, JSON.stringify(inputs));
-  const job = makeJob("bulk", key, p.tenantId, { key }, c.get("requestId"));
-  const repo = new Repository(c.env.DB);
-  await repo.enqueue(job);
-  await repo.audit(p, "bulk.import", job.jobId, c.get("requestId"), {
-    count: inputs.length,
-    format,
-  });
-  c.executionCtx.waitUntil(dispatchOutbox(c.env));
-  return c.json(
-    { job_id: job.jobId, submitted: inputs.length, status: "queued" },
-    202,
+  const requestKey = z
+    .string()
+    .trim()
+    .min(1)
+    .max(200)
+    .optional()
+    .parse(c.req.header("Idempotency-Key"));
+  const result = await submitBulk(
+    c.env.DB,
+    c.env.ARCHIVE,
+    p,
+    inputs,
+    requestKey,
+    c.get("requestId"),
   );
+  c.executionCtx.waitUntil(dispatchOutbox(c.env));
+  return c.json(result, 202);
 });
 app.get("/v1/jobs/:id", scope("assessment:read"), async (c) => {
   const job = await new Repository(c.env.DB).job(
@@ -310,12 +320,28 @@ app.get("/v1/jobs/:id", scope("assessment:read"), async (c) => {
     c.req.param("id")!,
   );
   if (!job) throw new AppError("NOT_FOUND", 404, "Job not found");
+  const id = c.req.param("id")!;
+  const tenant = c.get("principal").tenantId;
   const counts = await c.env.DB.prepare(
-    "SELECT stage,status,COUNT(*) AS count FROM pipeline_jobs WHERE tenant_id=? AND (json_extract(data,'$.payload.bulkId')=? OR id=?) GROUP BY stage,status",
+    "SELECT stage,status,COUNT(*) AS count FROM pipeline_jobs WHERE tenant_id=? AND (json_extract(data,'$.payload.bulkId')=? OR json_extract(data,'$.payload.rootId')=? OR id=?) GROUP BY stage,status",
   )
-    .bind(c.get("principal").tenantId, c.req.param("id")!, c.req.param("id")!)
-    .all();
-  return c.json({ ...job, stages: counts.results });
+    .bind(tenant, id, id, id)
+    .all<{ stage: string; status: string; count: number }>();
+  const pending = counts.results.some(
+    (row) => row.status === "queued" || row.status === "running",
+  );
+  const failed = counts.results.some((row) => row.status === "failed");
+  const totals = await c.env.DB.prepare(
+    "SELECT COALESCE(SUM(json_extract(result,'$.processed')),0) AS processed,COALESCE(SUM(json_array_length(json_extract(result,'$.errors'))),0) AS rejected FROM pipeline_jobs WHERE tenant_id=? AND stage='bulk' AND (json_extract(data,'$.payload.bulkId')=? OR json_extract(data,'$.payload.rootId')=? OR id=?)",
+  )
+    .bind(tenant, id, id, id)
+    .first<{ processed: number; rejected: number }>();
+  return c.json({
+    ...job,
+    stages: counts.results,
+    pipeline_status: pending ? "running" : failed ? "failed" : "complete",
+    totals,
+  });
 });
 app.post("/v1/jobs/:id/replay", scope("admin"), async (c) => {
   const p = c.get("principal");
@@ -347,11 +373,17 @@ app.get("/v1/assessments", scope("assessment:read"), async (c) => {
     .min(1)
     .max(100)
     .parse(c.req.query("limit") ?? 50);
-  const data = await new Repository(c.env.DB).assessments(
-    c.get("principal").tenantId,
-    limit,
-    c.req.query("cursor"),
-  );
+  const repo = new Repository(c.env.DB);
+  const tenant = c.get("principal").tenantId;
+  const view = AssessmentView.parse(c.req.query("view") ?? "all");
+  const q = z
+    .string()
+    .max(256)
+    .parse(c.req.query("q") ?? "");
+  const data = await repo.assessments(tenant, limit, c.req.query("cursor"), {
+    view,
+    q,
+  });
   return c.json({
     data,
     next_cursor:
@@ -363,6 +395,7 @@ app.get("/v1/assessments", scope("assessment:read"), async (c) => {
             ]),
           )
         : null,
+    ...(await repo.assessmentSummary(tenant)),
   });
 });
 app.get("/v1/assessments/:id", scope("assessment:read"), async (c) => {
@@ -384,17 +417,18 @@ for (const [action, status] of [
     scope("assessment:write"),
     async (c) => {
       const input = FeedbackRequest.parse(await json(c));
-      return c.json(
-        await new Repository(c.env.DB).feedback(
-          c.get("principal"),
-          c.req.param("id")!,
-          status,
-          input.field,
-          input.value,
-          input.reason,
-          c.get("requestId"),
-        ),
+      const result = await new Repository(c.env.DB).feedback(
+        c.get("principal"),
+        c.req.param("id")!,
+        status,
+        input.field,
+        input.value,
+        input.reason,
+        c.get("requestId"),
+        input.expected_revision,
       );
+      c.executionCtx.waitUntil(dispatchOutbox(c.env));
+      return c.json(result);
     },
   );
 app.post(
@@ -477,7 +511,11 @@ for (const [route, type] of [
     if (!resolved) throw new AppError("NOT_FOUND", 404, "Entity not found");
     return c.json({
       entity: resolved,
-      relationships: await repo.edges(resolved.id),
+      relationships: await repo.edges(
+        resolved.id,
+        80,
+        c.get("principal").tenantId,
+      ),
     });
   });
 }
@@ -516,7 +554,7 @@ app.get("/v1/entities/:id", scope("intel:read"), async (c) => {
   )
     .bind(id)
     .all<{ provenance: string }>();
-  const edges = await repo.edges(id, 30);
+  const edges = await repo.edges(id, 30, c.get("principal").tenantId);
   const relationships = [];
   for (const edge of edges) {
     const other =
@@ -556,7 +594,11 @@ app.get("/v1/graph/:id", scope("intel:read"), async (c) => {
   for (let i = 0; i < depth; i++) {
     const next: string[] = [];
     for (const id of frontier) {
-      for (const edge of await repo.edges(id, 30)) {
+      for (const edge of await repo.edges(
+        id,
+        30,
+        c.get("principal").tenantId,
+      )) {
         if (nodes.size >= 100 || edges.size >= 200) {
           truncated = true;
           break;
@@ -740,6 +782,9 @@ for (const action of ["confirm", "reject"] as const)
           JSON.stringify(input),
           now,
         ),
+        c.env.DB.prepare(
+          "DELETE FROM classification_cache WHERE tenant_id=?",
+        ).bind(p.tenantId),
       ]);
       return c.json({ decision: action, assertion_scope: "tenant" });
     },
@@ -869,7 +914,7 @@ app.get("/v1/exports", scope("assessment:read"), async (c) => {
     .parse(c.req.query("limit") ?? 50);
   const cursor = c.req.query("cursor") ?? "";
   const rows = await c.env.DB.prepare(
-    "SELECT id,assessment_id,created_at,created_at||'|'||id AS cursor FROM exports WHERE tenant_id=? AND created_at||'|'||id>? ORDER BY created_at,id LIMIT ?",
+    "SELECT id,assessment_id,created_at,created_at||'|'||id AS cursor FROM assessment_exports WHERE tenant_id=? AND created_at||'|'||id>? ORDER BY created_at,id LIMIT ?",
   )
     .bind(c.get("principal").tenantId, cursor, limit)
     .all();
@@ -877,7 +922,7 @@ app.get("/v1/exports", scope("assessment:read"), async (c) => {
 });
 app.get("/v1/exports/:id", scope("assessment:read"), async (c) => {
   const row = await c.env.DB.prepare(
-    "SELECT r2_key FROM exports WHERE tenant_id=? AND id=?",
+    "SELECT r2_key FROM assessment_exports WHERE tenant_id=? AND id=?",
   )
     .bind(c.get("principal").tenantId, c.req.param("id")!)
     .first<{ r2_key: string }>();

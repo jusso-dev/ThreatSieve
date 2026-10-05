@@ -282,8 +282,19 @@ export interface ClassificationRun {
   durationMs: number;
 }
 export interface Assessment {
-  analyst_decision?: {field:string;value:unknown;reason:string;analystId:string;createdAt:string};
-  effective_classification?: "malicious"|"suspicious"|"benign"|"unknown";
+  revision?: number;
+  updated_at?: string;
+  effective_role?: ThreatRole;
+  effective_attack?: string[];
+  effective_actors?: string[];
+  analyst_decision?: {
+    field: string;
+    value: unknown;
+    reason: string;
+    analystId: string;
+    createdAt: string;
+  };
+  effective_classification?: "malicious" | "suspicious" | "benign" | "unknown";
   schema_version: "1.0";
   assessment_id: string;
   observable: Observable;
@@ -340,6 +351,7 @@ export const BulkRequest = z.object({
     .max(100000),
 });
 export const FeedbackRequest = z.object({
+  expected_revision: z.number().int().nonnegative().optional(),
   field: z
     .enum(["assessment", "malicious", "role", "attack", "actors"])
     .default("assessment"),
