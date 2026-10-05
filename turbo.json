@@ -1,0 +1,19 @@
+{
+  "tasks": {
+    "dev": {
+      "cache": false,
+      "persistent": true
+    },
+    "build": {
+      "dependsOn": ["^build"],
+      "outputs": [".next/**", "!.next/cache/**", "dist/**"]
+    }
+  },
+  "globalDependencies": [
+    "packages/**",
+    "workers/**",
+    "migrations/**",
+    "wrangler.jsonc",
+    "tsconfig.json"
+  ]
+}

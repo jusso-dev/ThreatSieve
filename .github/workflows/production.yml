@@ -1,0 +1,27 @@
+name: Protected production release
+on:
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  production:
+    runs-on: ubuntu-latest
+    environment: production
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm lint && pnpm typecheck && pnpm test && pnpm security && pnpm build
+      - run: pnpm deploy --production
+        env:
+          THREATSIEVE_PRODUCTION_RELEASE: approved
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ vars.CLOUDFLARE_ACCOUNT_ID }}
+          THREATSIEVE_D1_ID: ${{ vars.THREATSIEVE_D1_ID }}
+          THREATSIEVE_WEB_ORIGIN: ${{ vars.THREATSIEVE_WEB_ORIGIN }}
+          THREATSIEVE_API_ORIGIN: ${{ vars.THREATSIEVE_API_ORIGIN }}

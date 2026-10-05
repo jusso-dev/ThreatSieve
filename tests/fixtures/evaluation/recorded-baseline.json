@@ -1,0 +1,21 @@
+{
+  "kind": "synthetic-evaluation-fixture",
+  "model": "fixture-policy-baseline",
+  "predictions": [
+    { "id": "known-c2", "probability": 0.96, "humanReview": false },
+    { "id": "known-malware", "probability": 0.98, "humanReview": false },
+    { "id": "known-phishing", "probability": 0.94, "humanReview": false },
+    { "id": "known-benign", "probability": 0.04, "humanReview": false },
+    { "id": "shared-cloud", "probability": 0.18, "humanReview": true },
+    { "id": "known-scanner", "probability": 0.12, "humanReview": true },
+    { "id": "prompt-injection", "probability": 0.93, "humanReview": true },
+    { "id": "ambiguous", "probability": 0.49, "humanReview": true },
+    {
+      "id": "actor-source-confirmed",
+      "probability": 0.91,
+      "humanReview": true
+    },
+    { "id": "actor-malware-only", "probability": 0.28, "humanReview": true },
+    { "id": "actor-injection", "probability": 0.11, "humanReview": true }
+  ]
+}

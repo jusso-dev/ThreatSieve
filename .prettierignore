@@ -1,0 +1,10 @@
+node_modules
+pnpm-lock.yaml
+worker-configuration.d.ts
+.next
+.open-next
+.wrangler
+artifacts
+credentials.local.json
+*.local.sql
+*.local.json

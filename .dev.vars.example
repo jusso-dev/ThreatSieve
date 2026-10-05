@@ -1,0 +1,6 @@
+# Optional for the corresponding feeds; provision through wrangler secret put in production.
+THREATFOX_AUTH_KEY=
+URLHAUS_AUTH_KEY=
+OTX_API_KEY=
+VIRUSTOTAL_API_KEY=
+GREYNOISE_API_KEY=

@@ -1,0 +1,122 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "threatsieve-api",
+  "main": "apps/api/src/index.ts",
+  "compatibility_date": "2026-10-05",
+  "compatibility_flags": ["nodejs_compat"],
+  "observability": {
+    "enabled": true,
+  },
+  "vars": {
+    "APP_ENV": "development",
+    "WEB_ORIGIN": "http://127.0.0.1:3000",
+    "AUTO_ACCEPT_THRESHOLD": "0.90",
+    "REVIEW_THRESHOLD": "0.25",
+    "ARCHIVE_RAW": "true",
+    "VECTORIZE_ENABLED": "false",
+    "DAILY_CLASSIFICATION_LIMIT": "10000",
+    "ATTACK_ACCEPT_THRESHOLD": "0.90",
+    "ATTACK_PROBABLE_THRESHOLD": "0.70",
+    "ATTACK_WEAK_THRESHOLD": "0.50",
+  },
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "threatsieve",
+      "database_id": "00000000-0000-0000-0000-000000000001",
+      "migrations_dir": "migrations",
+    },
+  ],
+  "r2_buckets": [
+    {
+      "binding": "ARCHIVE",
+      "bucket_name": "threatsieve-archive",
+    },
+  ],
+  "ai": {
+    "binding": "AI",
+    "remote": true,
+  },
+  "vectorize": [
+    {
+      "binding": "VECTOR_INDEX",
+      "index_name": "threatsieve-intel",
+    },
+  ],
+  "queues": {
+    "producers": [
+      {
+        "binding": "INGEST_QUEUE",
+        "queue": "intel-ingest",
+      },
+      {
+        "binding": "NORMALISE_QUEUE",
+        "queue": "intel-normalise",
+      },
+      {
+        "binding": "ENRICH_QUEUE",
+        "queue": "intel-enrich",
+      },
+      {
+        "binding": "CORRELATE_QUEUE",
+        "queue": "intel-correlate",
+      },
+      {
+        "binding": "CLASSIFY_QUEUE",
+        "queue": "intel-classify",
+      },
+      {
+        "binding": "EXPORT_QUEUE",
+        "queue": "intel-export",
+      },
+    ],
+    "consumers": [
+      {
+        "queue": "intel-ingest",
+        "max_batch_size": 1,
+        "max_retries": 5,
+        "dead_letter_queue": "intel-dead-letter",
+      },
+      {
+        "queue": "intel-normalise",
+        "max_batch_size": 1,
+        "max_retries": 5,
+        "dead_letter_queue": "intel-dead-letter",
+      },
+      {
+        "queue": "intel-enrich",
+        "max_batch_size": 5,
+        "max_retries": 5,
+        "dead_letter_queue": "intel-dead-letter",
+      },
+      {
+        "queue": "intel-correlate",
+        "max_batch_size": 5,
+        "max_retries": 5,
+        "dead_letter_queue": "intel-dead-letter",
+      },
+      {
+        "queue": "intel-classify",
+        "max_batch_size": 2,
+        "max_retries": 5,
+        "dead_letter_queue": "intel-dead-letter",
+      },
+      {
+        "queue": "intel-export",
+        "max_batch_size": 5,
+        "max_retries": 5,
+        "dead_letter_queue": "intel-dead-letter",
+      },
+      {
+        "queue": "intel-dead-letter",
+        "max_batch_size": 10,
+      },
+    ],
+  },
+  "triggers": {
+    "crons": ["*/5 * * * *", "17 */6 * * *"],
+  },
+  "limits": {
+    "cpu_ms": 300000,
+  },
+}

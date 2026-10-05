@@ -1,0 +1,33 @@
+# Data model
+
+D1 migrations are the sole schema authority. No request dynamically creates tables. Prepared statements bind external input; interpolated table names come from a closed internal enum.
+
+```mermaid
+erDiagram
+  tenants ||--o{ api_keys : owns
+  tenants ||--o{ tenant_members : contains
+  tenants ||--o{ assessments : scopes
+  tenants ||--o{ customer_observations : isolates
+  tenants ||--o{ tenant_observables : sees
+  entities ||--o| observables : specializes
+  entities ||--o{ entity_aliases : resolves
+  entities ||--o{ entity_sources : preserves
+  entities ||--o{ evidence : supports
+  entities ||--o{ relationships : relates
+  assessments ||--o{ classification_runs : reproduces
+  assessments ||--o{ analyst_feedback : improves
+  assessments ||--o{ exports : serializes
+  pipeline_jobs ||--o| outbox : dispatches
+```
+
+Global entities store a validated typed JSON representation alongside indexed type, canonical name and external ID. Observables add a unique `(type, normalized_value)` key and deterministic SHA-256 identity. Normalisation precedes hashing. DNS names are lowercased and IDNA-normalised; hashes are lowercased; IPv6 is canonicalised; URL host/default ports are normalised without sorting query parameters or lowercasing paths. Ambiguous observables need explicit type.
+
+Relationships retain assertion type, source/target, confidence and provenance. Source claims and model inferences are never rewritten into observed facts. Tenant analyst relationship feedback is stored separately from the shared public graph. `entity_sources` retains provenance when another feed supplies aliases for an existing entity.
+
+Private submissions and customer observations have visibility grants in `tenant_observables`. They do not enter public search or graph results. Public feed intelligence can promote the same deterministic observable into global visibility without disclosing tenant observations. Assessment, feedback, session, export and job queries require tenant scope.
+
+Evidence payloads are queryable JSON with an R2 raw-object reference. Arrays are bounded on the decision path. The current bundle limit is 100 public evidence records plus 30 customer records. Graph retrieval is bounded; truncated context forces review. Assessment lists use cursors, and entity search uses indexed exact aliases followed by a limited prefix lookup.
+
+Customer technology profiles, assets and observations are tenant-specific. Explicit sharing consent is recorded on observations for future privacy-safe aggregation. No private evidence is copied into the global evidence table by the observation API.
+
+Audit events record actor, tenant, action, correlation, time and structured data. API key hashes are SHA-256 of cryptographically random high-entropy tokens. Raw keys are returned once at creation; web sessions use separately generated expiring opaque tokens.

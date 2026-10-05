@@ -1,0 +1,13 @@
+{
+  "$schema": "../../node_modules/wrangler/config-schema.json",
+  "name": "threatsieve-web",
+  "main": ".open-next/worker.js",
+  "compatibility_date": "2026-10-05",
+  "compatibility_flags": ["nodejs_compat"],
+  "assets": { "directory": ".open-next/assets", "binding": "ASSETS" },
+  "services": [
+    { "binding": "WORKER_SELF_REFERENCE", "service": "threatsieve-web" },
+  ],
+  "vars": { "API_ORIGIN": "http://127.0.0.1:8787" },
+  "observability": { "enabled": true },
+}
