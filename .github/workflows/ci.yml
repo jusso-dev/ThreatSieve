@@ -46,6 +46,7 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: end-to-end-results
+          include-hidden-files: true
           if-no-files-found: ignore
           retention-days: 14
           path: |
@@ -56,6 +57,7 @@ jobs:
             .e2e/failures/
             .e2e/logs/
             artifacts/playwright/
+            !.e2e/runtime/**
       - uses: actions/upload-artifact@v4
         with:
           name: evaluation-report
