@@ -19,7 +19,8 @@
     "workers/**/*.ts",
     "scripts/**/*.ts",
     "tests/**/*.ts",
-    "worker-configuration.d.ts"
+    "worker-configuration.d.ts",
+    "e2e.config.ts"
   ],
-  "exclude": ["node_modules", "apps/web", "tests/e2e"]
+  "exclude": ["node_modules", "apps/web", "tests/e2e", "tests/system"]
 }

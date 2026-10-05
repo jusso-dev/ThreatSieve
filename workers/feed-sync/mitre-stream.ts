@@ -10,7 +10,7 @@ export async function syncMitreStream(env: AppEnv, job: PipelineJob) {
   const repo = new Repository(env.DB);
   const response = await fetch(
     "https://raw.githubusercontent.com/mitre-attack/attack-stix-data/master/enterprise-attack/enterprise-attack.json",
-    { redirect: "error", signal: AbortSignal.timeout(120000) },
+    { redirect: "manual", signal: AbortSignal.timeout(120000) },
   );
   if (!response.ok || !response.body)
     throw new Error("MITRE upstream HTTP " + response.status);

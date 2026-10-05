@@ -91,7 +91,7 @@ export class AdditionalFeed extends PublicFeed {
           "https://raw.githubusercontent.com/MISP/misp-galaxy/main/clusters/" +
             collection +
             ".json",
-          { redirect: "error", signal: AbortSignal.timeout(30000) },
+          { redirect: "manual", signal: AbortSignal.timeout(30000) },
         );
         if (!response.ok)
           throw new Error("MISP upstream HTTP " + response.status);
@@ -136,7 +136,7 @@ export class AdditionalFeed extends PublicFeed {
       }
       const response = await this.request(url, {
         headers,
-        redirect: "error",
+        redirect: "manual",
         signal: AbortSignal.timeout(60000),
       });
       if (!response.ok) throw new Error("Upstream HTTP " + response.status);

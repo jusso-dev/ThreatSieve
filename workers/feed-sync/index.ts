@@ -289,7 +289,7 @@ export async function finalizeFeeds(env: AppEnv) {
 export async function queueFeedSync(
   env: AppEnv,
   sourceId: string,
-  correlationId = crypto.randomUUID(),
+  correlationId: string = crypto.randomUUID(),
 ) {
   const repo = new Repository(env.DB);
   const job = makeJob("feed-sync", sourceId, undefined, {}, correlationId);

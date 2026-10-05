@@ -1,0 +1,12 @@
+{
+  "extends": "../../tsconfig.json",
+  "compilerOptions": {
+    "lib": ["ES2022", "DOM", "DOM.Iterable"]
+  },
+  "include": [
+    "./**/*.ts",
+    "../../e2e.config.ts",
+    "../../worker-configuration.d.ts"
+  ],
+  "exclude": []
+}

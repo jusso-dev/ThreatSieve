@@ -8,7 +8,7 @@ ThreatSieve is a TypeScript-first intelligence pipeline and analyst workspace bu
 
 ## Run locally
 
-Requirements: Node.js 22.14+, pnpm 10, and a Cloudflare account with Workers AI access for live classification.
+Requirements: Node.js 22.22.3+ (22.x) or 24.8+, pnpm 10, and a Cloudflare account with Workers AI access for live classification.
 
 ```sh
 pnpm install
@@ -52,7 +52,7 @@ Sync MITRE first, then MISP, then indicator feeds so canonical knowledge is avai
 | `pnpm dev`                                            | API Worker and Next.js development servers                       |
 | `pnpm bootstrap`                                      | Local migrations and synthetic demo seed                         |
 | `pnpm test`                                           | Offline unit and D1 integration tests                            |
-| `pnpm test:e2e`                                       | Browser tests against running local demo servers                 |
+| `pnpm test:e2e`                                       | Isolated full-stack tests using tester-army/e2e                  |
 | `pnpm lint`                                           | TypeScript/React lint checks                                     |
 | `pnpm typecheck`                                      | Strict backend and frontend types                                |
 | `pnpm build`                                          | Worker dry-run bundle and Next.js production build               |
@@ -61,7 +61,7 @@ Sync MITRE first, then MISP, then indicator feeds so canonical knowledge is avai
 | `pnpm deploy`                                         | Configured staging deployment; see deployment guide              |
 | `pnpm tenant:create 'Organisation' admin@example.com` | Provision a local tenant and one-time key                        |
 
-For browser tests, run `pnpm exec playwright install chromium` once. Tests never use live intelligence APIs. `pnpm eval --current current.json --candidate candidate.json` compares measured predictions. Default fixture metrics are **not a claim about Clef accuracy**.
+For browser tests, run `pnpm exec e2e-web install chromium` once, then `pnpm test:e2e`. The suite starts its own production web build and ephemeral Workers/D1/R2/Queues environment; no bootstrap, Cloudflare login, feed credentials or model API key is needed. See [end-to-end testing](docs/e2e.md) for coverage and diagnostics. The earlier Playwright regressions remain available as `pnpm test:playwright` against the local demo (CI starts that demo automatically). Tests never use live intelligence APIs. `pnpm eval --current current.json --candidate candidate.json` compares measured predictions. Default fixture metrics are **not a claim about Clef accuracy**.
 
 ## Production deployment
 

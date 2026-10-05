@@ -4,6 +4,7 @@ export default ts.config(
   {
     ignores: [
       "**/node_modules/**",
+      "**/.e2e/**",
       "**/.next/**",
       "**/.open-next/**",
       "**/.wrangler/**",

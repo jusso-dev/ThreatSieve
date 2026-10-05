@@ -25,7 +25,7 @@ export function makeJob(
   entityId: string,
   tenantId?: string,
   payload: Record<string, unknown> = {},
-  correlationId = crypto.randomUUID(),
+  correlationId: string = crypto.randomUUID(),
 ): PipelineJob {
   return {
     jobId: crypto.randomUUID(),

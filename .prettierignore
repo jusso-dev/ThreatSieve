@@ -8,3 +8,5 @@ artifacts
 credentials.local.json
 *.local.sql
 *.local.json
+
+.e2e

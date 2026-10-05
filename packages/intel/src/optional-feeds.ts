@@ -22,7 +22,7 @@ export class OptionalFeed extends PublicFeed {
     name: string,
     repo: Repository,
     private config: OptionalFeedConfig,
-    request: typeof fetch = fetch,
+    request: typeof fetch = (input, init) => fetch(input, init),
   ) {
     super(id, name, repo, {}, request);
   }
@@ -104,7 +104,7 @@ export class OptionalFeed extends PublicFeed {
     }
     const response = await this.request(url, {
       headers,
-      redirect: "error",
+      redirect: "manual",
       signal: AbortSignal.timeout(30000),
     });
     if (!response.ok) throw new Error("Provider HTTP " + response.status);

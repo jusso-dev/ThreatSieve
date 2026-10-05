@@ -661,7 +661,7 @@ app.get("/v1/feeds", scope("feeds:read"), async (c) => {
     return {
       ...source,
       enabled: missing ? 0 : source.enabled,
-      status: missing ? "disabled" : source.status,
+      status: missing || !source.enabled ? "disabled" : source.status,
     };
   });
   return c.json({ data });

@@ -6,7 +6,7 @@
   "scripts": {
     "dev": "pnpm db:migrate && turbo dev",
     "build": "turbo build",
-    "typecheck": "tsc --noEmit && pnpm --filter @threatsieve/web typecheck",
+    "typecheck": "tsc --noEmit && tsc -p tests/system/tsconfig.json && pnpm --filter @threatsieve/web typecheck",
     "lint": "eslint .",
     "test": "vitest run",
     "test:integration": "vitest run tests/integration.test.ts",
@@ -19,15 +19,19 @@
     "format": "prettier --write .",
     "bootstrap": "pnpm db:migrate && pnpm seed",
     "tenant:create": "tsx scripts/tenant.ts",
-    "test:e2e": "playwright test",
+    "test:e2e": "E2E_TELEMETRY_DISABLED=1 e2e run",
     "security": "tsx scripts/security-check.ts",
-    "db:validate": "vitest run tests/integration.test.ts"
+    "db:validate": "vitest run tests/integration.test.ts",
+    "test:playwright": "playwright test"
   },
   "devDependencies": {
     "@cloudflare/workers-types": "latest",
+    "@e2e-dev/web": "0.12.0",
     "@eslint/js": "^9.39.0",
     "@playwright/test": "^1.63.0",
     "@types/node": "^22.0.0",
+    "e2e": "0.17.0",
+    "esbuild": "0.28.2",
     "eslint": "^9.39.0",
     "miniflare": "^4.20260730.0",
     "prettier": "^3.0.0",

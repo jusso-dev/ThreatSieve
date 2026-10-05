@@ -173,7 +173,8 @@ export class PublicFeed implements ThreatFeedProvider {
     readonly name: string,
     protected repo: Repository,
     protected secrets: FeedSecrets = {},
-    protected request: typeof fetch = fetch,
+    // Workers fetch must keep its global receiver when stored on a provider.
+    protected request: typeof fetch = (input, init) => fetch(input, init),
   ) {}
   async getCheckpoint() {
     return (
@@ -239,7 +240,8 @@ export class PublicFeed implements ThreatFeedProvider {
     }
     const response = await this.request(url, {
       ...init,
-      redirect: "error",
+      // Workers has no redirect:error; reject all non-2xx responses below.
+      redirect: "manual",
       signal: AbortSignal.timeout(60000),
     });
     if (!response.ok) throw new Error("Upstream HTTP " + response.status);

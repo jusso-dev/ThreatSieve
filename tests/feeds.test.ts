@@ -162,3 +162,44 @@ it("keeps optional feeds disabled and rejects custom endpoint SSRF", async () =>
   });
   await expect(unsafe.fetch()).rejects.toThrow("approved HTTPS");
 });
+it("rejects redirects without forwarding feed credentials to another host", async () => {
+  const request = vi.fn<typeof fetch>().mockResolvedValue(
+    new Response(null, {
+      status: 302,
+      headers: { Location: "https://untrusted.invalid/collect" },
+    }),
+  );
+  const providers = [
+    new PublicFeed(
+      "threatfox",
+      "ThreatFox",
+      repo,
+      { THREATFOX_AUTH_KEY: "test-only" },
+      request,
+    ),
+    new AdditionalFeed(
+      "urlhaus",
+      "URLhaus",
+      repo,
+      { URLHAUS_AUTH_KEY: "test-only" },
+      request,
+    ),
+    new OptionalFeed(
+      "stix",
+      "Approved STIX",
+      repo,
+      {
+        enabled: true,
+        endpoint: "https://approved.invalid/stix",
+        allowedHost: "approved.invalid",
+        apiKey: "test-only",
+      },
+      request,
+    ),
+  ];
+  for (const provider of providers)
+    await expect(provider.fetch()).rejects.toThrow("302");
+  expect(request).toHaveBeenCalledTimes(3);
+  for (const [, init] of request.mock.calls)
+    expect(init?.redirect).toBe("manual");
+});

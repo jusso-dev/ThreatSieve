@@ -49,13 +49,15 @@ export function Operations() {
     setHistory([]);
   };
   useEffect(() => {
+    // Only a changed search should reset pagination, never the initial mount.
+    if (search === query) return;
     const timer = setTimeout(() => {
       setQuery(search);
       setCursor("");
       setHistory([]);
     }, 250);
     return () => clearTimeout(timer);
-  }, [search]);
+  }, [search, query]);
   const params = new URLSearchParams({
     view: filter,
     q: query,

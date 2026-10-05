@@ -36,8 +36,26 @@ jobs:
       - run: python -m pip install stix2==3.0.2
       - name: Validate STIX interoperability
         run: python -c "import json, stix2; stix2.parse(json.load(open('artifacts/demo.stix.json')), allow_custom=True)"
-      - run: pnpm exec playwright install --with-deps chromium
-      - run: pnpm test:e2e
+      - run: pnpm exec e2e-web install chromium --with-deps
+      - name: Existing browser regressions
+        run: pnpm test:playwright
+      - name: Isolated full-stack end-to-end suite
+        run: pnpm test:e2e
+      - name: Publish end-to-end diagnostics
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: end-to-end-results
+          if-no-files-found: ignore
+          retention-days: 14
+          path: |
+            .e2e/report.json
+            .e2e/junit.xml
+            .e2e/summary.md
+            .e2e/artifacts/
+            .e2e/failures/
+            .e2e/logs/
+            artifacts/playwright/
       - uses: actions/upload-artifact@v4
         with:
           name: evaluation-report
