@@ -225,7 +225,9 @@ test("bulk retries reuse an idempotency key and terminal progress stops polling"
   await page
     .getByRole("button", { name: "Analyse indicators", exact: true })
     .click();
-  await expect(page.getByRole("alert")).toBeVisible();
+  await expect(
+    page.getByRole("alert").filter({ hasText: "Failed to fetch" }),
+  ).toBeVisible();
   await page
     .getByRole("button", { name: "Analyse indicators", exact: true })
     .click();
