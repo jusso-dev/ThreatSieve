@@ -184,7 +184,7 @@ test("search reports failed assessments and selecting a known entity does not in
   await expect(
     page
       .getByRole("alert")
-      .filter({ hasText: "Classifier unavailable for test" }),
+      .filter({ hasText: "ThreatSieve is temporarily unavailable" }),
   ).toBeVisible();
   expect(classifications).toBe(1);
   await search.fill("DemoRAT");
@@ -226,7 +226,9 @@ test("bulk retries reuse an idempotency key and terminal progress stops polling"
     .getByRole("button", { name: "Analyse indicators", exact: true })
     .click();
   await expect(
-    page.getByRole("alert").filter({ hasText: "Failed to fetch" }),
+    page
+      .getByRole("alert")
+      .filter({ hasText: "Check your connection and try again." }),
   ).toBeVisible();
   await page
     .getByRole("button", { name: "Analyse indicators", exact: true })
