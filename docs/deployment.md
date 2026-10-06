@@ -35,7 +35,7 @@ pnpm exec wrangler secret put URLHAUS_AUTH_KEY --name threatsieve-api-staging
 
 Generate the deployment config first with the deployment script's config-only mode described in `pnpm exec tsx scripts/deploy.ts --help`, then apply migrations before deploying traffic. Never commit generated credentials, `.dev.vars`, `.env.local`, real tenant bootstrap artifacts or raw customer intelligence.
 
-Existing installations must apply all migrations through `0007_last_admin.sql` before running this release. Migration 0006 preserves existing users, tenant IDs and memberships while adding Better Auth tables; migration 0007 protects the final admin with D1 triggers. Migration 0005 preserves legacy exports and adds assessment revisions. Local `pnpm db:migrate` applies it to the development database.
+Existing installations must apply all migrations through `0008_analyst_views.sql` before running this release. Migration 0008 adds personal saved views and browsing/sorting indexes without changing existing intelligence. Migration 0006 preserves existing users, tenant IDs and memberships while adding Better Auth tables; migration 0007 protects the final admin with D1 triggers. Migration 0005 preserves legacy exports and adds assessment revisions. Local `pnpm db:migrate` applies these to the development database.
 
 ## Release
 

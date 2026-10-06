@@ -833,3 +833,210 @@ it("does not include hidden neighboring observables or their edges in another te
     buildEvidenceBundle(repo, "tenant-b", privateObservable.id),
   ).rejects.toMatchObject({ status: 404 });
 });
+
+describe("analyst intelligence browsing", () => {
+  it("filters private observables before pagination and treats wildcard characters literally", async () => {
+    const value = await normalise(
+      "library-private-12345678-1234-1234-1234-123456789012.test",
+    );
+    await repo.putObservable(
+      value,
+      { ...provenance, sourceId: "customer" },
+      "tenant-a",
+    );
+    expect(
+      (
+        await repo.browseEntities("tenant-a", { q: value.normalizedValue })
+      ).data.map((e) => e.id),
+    ).toContain(value.id);
+    expect(
+      (await repo.browseEntities("tenant-b", { q: value.normalizedValue }))
+        .data,
+    ).toEqual([]);
+    expect((await repo.browseEntities("tenant-a", { q: "%" })).data).toEqual(
+      [],
+    );
+  });
+  it("resolves alias prefixes, source filters and external IDs without inventing entities", async () => {
+    await repo.putEntity({
+      id: "library-actor",
+      type: "threat-actor",
+      name: "Synthetic Research Actor",
+      aliases: ["Synthetic Alternate Name"],
+      externalId: "GTEST1",
+      description: "Synthetic repository regression",
+      data: {},
+      provenance,
+    });
+    for (const q of ["Synthetic Alternate", "GTEST1"])
+      expect(
+        (
+          await repo.browseEntities("tenant-a", {
+            q,
+            type: "threat-actor",
+            source: "mitre",
+          })
+        ).data.map((e) => e.id),
+      ).toEqual(["library-actor"]);
+    expect(
+      (
+        await repo.browseEntities("tenant-a", {
+          q: "GTEST1",
+          source: "other-source",
+        })
+      ).data,
+    ).toEqual([]);
+  });
+  it("entity list and alias detail APIs cannot expose private actor records", async () => {
+    await repo.putEntity({
+      id: "private-actor-test",
+      type: "threat-actor",
+      name: "Private Synthetic Actor",
+      aliases: ["Private Alias"],
+      description: "Synthetic private record",
+      data: {},
+      provenance: { ...provenance, sourceId: "customer" },
+    });
+    const headers = { Authorization: "Bearer test-only-key" };
+    const env = { DB: db, WEB_ORIGIN: "https://web.test" };
+    const response = await app.request("/v1/actors", { headers }, env);
+    const body = (await response.json()) as { data: { id: string }[] };
+    expect(body.data.some((e) => e.id === "private-actor-test")).toBe(false);
+    for (const id of ["private-actor-test", "Private Alias"])
+      expect(
+        (
+          await app.request(
+            "/v1/actors/" + encodeURIComponent(id),
+            { headers },
+            env,
+          )
+        ).status,
+      ).toBe(404);
+  });
+});
+
+describe("saved view ownership and limits", () => {
+  it("isolates views between two users in the same tenant and permits updates at the limit", async () => {
+    const now = new Date().toISOString();
+    for (const id of ["view-owner", "view-colleague"]) {
+      await db
+        .prepare(
+          "INSERT INTO users(id,email,created_at,name,updated_at) VALUES(?,?,?,?,?)",
+        )
+        .bind(id, id + "@example.test", now, id, now)
+        .run();
+      await db
+        .prepare(
+          "INSERT INTO api_keys(id,tenant_id,user_id,name,hash,scopes,created_at) VALUES(?,?,?,?,?,?,?)",
+        )
+        .bind(
+          id + "-key",
+          "tenant-a",
+          id,
+          id,
+          await digest(id + "-token"),
+          JSON.stringify(["assessment:read"]),
+          now,
+        )
+        .run();
+    }
+    for (let i = 0; i < 50; i++)
+      await db
+        .prepare("INSERT INTO saved_views VALUES(?,?,?,?,?,?)")
+        .bind(
+          "view-" + i,
+          "tenant-a",
+          "view-owner",
+          "View " + i,
+          JSON.stringify({ view: "review", q: "private-view-search" }),
+          now,
+        )
+        .run();
+    const env = { DB: db, WEB_ORIGIN: "https://web.test" };
+    const headers = {
+      Authorization: "Bearer view-owner-token",
+      "Content-Type": "application/json",
+    };
+    const foreign = {
+      Authorization: "Bearer view-colleague-token",
+      "Content-Type": "application/json",
+    };
+    const list = await app.request(
+      "/v1/saved-views",
+      { headers: foreign },
+      env,
+    );
+    expect(((await list.json()) as { data: unknown[] }).data).toEqual([]);
+    expect(
+      (
+        await app.request(
+          "/v1/saved-views/view-0",
+          { headers: foreign, method: "DELETE" },
+          env,
+        )
+      ).status,
+    ).toBe(404);
+    expect(
+      (
+        await app.request(
+          "/v1/saved-views",
+          {
+            headers,
+            method: "POST",
+            body: JSON.stringify({
+              name: "New at limit",
+              filters: { view: "all" },
+            }),
+          },
+          env,
+        )
+      ).status,
+    ).toBe(409);
+    expect(
+      (
+        await app.request(
+          "/v1/saved-views",
+          {
+            headers,
+            method: "POST",
+            body: JSON.stringify({ name: "View 0", filters: { view: "all" } }),
+          },
+          env,
+        )
+      ).status,
+    ).toBe(201);
+    const owner = await app.request("/v1/saved-views", { headers }, env);
+    const rows = (await owner.json()) as {
+      data: { name: string; filters: { view: string } }[];
+    };
+    expect(rows.data).toHaveLength(50);
+    expect(rows.data.find((r) => r.name === "View 0")?.filters.view).toBe(
+      "all",
+    );
+  });
+  it("keeps opaque entity cursors small even for very long source names", async () => {
+    for (const id of ["long-entity-a", "long-entity-b"])
+      await repo.putEntity({
+        id,
+        name: "a".repeat(3000) + id,
+        type: "tool",
+        description: "Synthetic length regression",
+        aliases: [],
+        data: {},
+        provenance,
+      });
+    const first = await repo.browseEntities("tenant-a", {
+      q: "a".repeat(100),
+      limit: 1,
+    });
+    expect(first.next_cursor!.length).toBeLessThan(200);
+    const second = await repo.browseEntities("tenant-a", {
+      q: "a".repeat(100),
+      limit: 1,
+      cursor: first.next_cursor!,
+    });
+    expect(first.data[0]?.id).toBe("long-entity-a");
+    expect(second.data[0]?.id).toBe("long-entity-b");
+    expect(second.next_cursor).toBeNull();
+  });
+});

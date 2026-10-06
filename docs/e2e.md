@@ -1,6 +1,6 @@
 # Full-stack end-to-end testing
 
-The primary suite contains **61 end-to-end tests** and uses [tester-army/e2e](https://github.com/tester-army/e2e), pinned to `e2e@0.17.0` and `@e2e-dev/web@0.12.0`. Tests use its browser fixtures, semantic locators, exact assertions, route fault injection, downloads and polling. No agent or language-model call decides whether a test passes.
+The primary suite contains **74 end-to-end tests** and uses [tester-army/e2e](https://github.com/tester-army/e2e), pinned to `e2e@0.17.0` and `@e2e-dev/web@0.12.0`. Tests use its browser fixtures, semantic locators, exact assertions, route fault injection, downloads and polling. No agent or language-model call decides whether a test passes.
 
 ## Run
 
@@ -64,6 +64,8 @@ Feed responses are intercepted at the Workers outbound boundary. Unexpected dest
 The eight additional Playwright regressions remain in `tests/e2e/` and run in CI as `pnpm test:playwright`, including timer-controlled polling behavior. Unit, repository, migration, classifier, adversarial-input and evaluation tests continue under `pnpm test` and `pnpm eval`.
 
 ## Reports and debugging
+
+The analyst workbench suite covers personal saved views and ownership, server-side triage filters and all sort modes, bounded keyset pagination, the intelligence library, source details, evidence filtering/timelines, graph controls, keyboard search, return-to-queue context, reassessment navigation and malformed upstream dates. Desktop and mobile screenshots are regenerated with `UPDATE_SCREENSHOTS=1 pnpm test:e2e` and displayed in the README.
 
 The runner emits `.e2e/report.json`, `.e2e/junit.xml` and `.e2e/summary.md`. Failed browser tests retain screenshots, screen snapshots and traces in `.e2e/artifacts/`; `.e2e/logs/app.log` contains startup and structured API/job logs. GitHub Actions uploads these diagnostics even when a test fails, but never uploads `.e2e/runtime/`.
 

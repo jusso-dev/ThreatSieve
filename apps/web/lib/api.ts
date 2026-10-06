@@ -2,6 +2,7 @@
 import { toast } from "sonner";
 import { useEffect, useState, useCallback, useRef } from "react";
 const mutationMessage = (path: string) => {
+  if (path.includes("/saved-views")) return "Saved views updated.";
   if (path.includes("/sync"))
     return "Source sync started. Progress will appear in the source list.";
   if (path.includes("/reclassify"))

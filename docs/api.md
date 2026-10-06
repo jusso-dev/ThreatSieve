@@ -54,3 +54,17 @@ Entity lists default to 50 and cap at 100 records. Graph depth caps at three, no
 `GET /v1/assessments` accepts `view=all|attention|review`, `q`, `limit` and `cursor`. Filtering is performed before pagination. Responses include tenant-wide `summary` counts and the top three attention items in `priority`; those counts do not depend on the current page. Invalid cursors return 400 `INVALID_CURSOR`.
 
 Better Auth browser routes include sign-in, sign-up, sign-out, email verification, password reset and the organization plugin’s invitation/member endpoints. API Worker routes use `/auth/*`; the web proxy exposes `/api/auth/*`. Organization creation/deletion are disabled. The legacy `/v1/session` key exchange is development-only; production sign-out uses `POST /api/auth/sign-out`.
+
+## Analyst library and saved triage views
+
+`GET /v1/entities` requires `intel:read`. Parameters: `q` (literal name/alias/external-ID prefix, max 256 characters), `type` (entity type), `source` (source ID), `limit` (1–100, default 50), `cursor` (opaque). Returns `{data, next_cursor}` ordered by case-insensitive name then ID. Visibility is applied before pagination. Existing `/v1/actors`, `/v1/malware`, `/v1/campaigns` and `/v1/attack/techniques` retain their ID-based cursor format and now consistently enforce visibility.
+
+`GET /v1/assessments` also accepts `severity`, `classification`, `observable_type`, `status`, `min_confidence` (0–1), `observed` (`yes`/`no`) and `sort` (`newest`, `oldest`, `confidence`, `relevance`). Filters apply to the whole tenant dataset. Classification uses the analyst override when present. Use the returned opaque cursor unchanged; reset it when filters or sort change. Historical newest-first cursors remain supported. Summary counts are workspace-wide, independent of table filters.
+
+Saved views require `assessment:read` and are personal to the authenticated user within the active tenant:
+
+- `GET /v1/saved-views`: list up to 50 saved views.
+- `POST /v1/saved-views`: `{name, filters}`. Name is 1–60 characters; filters follow the validated assessment query schema. An existing name updates that view. Returns 201 on success, 409 when the limit prevents creation.
+- `DELETE /v1/saved-views/:id`: delete an owned view; foreign IDs return 404.
+
+Saved-view writes are audited. URLs and saved filters convey no authorization. Browser links still require a valid session and tenant membership.

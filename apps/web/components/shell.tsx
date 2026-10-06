@@ -18,6 +18,7 @@ import {
   LogOut,
   Users,
   Crosshair,
+  BookOpen,
 } from "lucide-react";
 import { AccessContext } from "@/lib/access";
 import { authClient, authResult } from "@/lib/auth";
@@ -25,6 +26,7 @@ import { api, useApi, publicAuthPath } from "@/lib/api";
 import { Button } from "./ui/button";
 const navigation = [
   { name: "Threat operations", href: "/", icon: Radar },
+  { name: "Intelligence library", href: "/intelligence", icon: BookOpen },
   { name: "Threat clusters", href: "/clusters", icon: Network },
   { name: "Intelligence sources", href: "/sources", icon: Database },
   { name: "Bulk analysis", href: "/bulk", icon: Upload },
@@ -44,8 +46,11 @@ function WorkspaceShell({ children }: { children: React.ReactNode }) {
     { id: string; name: string; type: string }[]
   >([]);
   const [searchError, setSearchError] = useState("");
+  const [searching, setSearching] = useState(false);
+  const [activeResult, setActiveResult] = useState(-1);
   const [open, setOpen] = useState(false);
   const input = useRef<HTMLInputElement>(null);
+  const pendingSearch = useRef<string | null>(null);
   const sidebar = useRef<HTMLElement>(null);
   const [assessing, setAssessing] = useState(false);
   const me = useApi<{
@@ -68,18 +73,32 @@ function WorkspaceShell({ children }: { children: React.ReactNode }) {
   useEffect(() => {
     if (query.length < 2) {
       setResults([]);
+      setSearching(false);
       return;
     }
     const controller = new AbortController();
     setSearchError("");
     setResults([]);
+    setActiveResult(-1);
+    setSearching(true);
     const timer = setTimeout(() => {
       void api<{ data: { id: string; name: string; type: string }[] }>(
         "v1/search?q=" + encodeURIComponent(query),
         { signal: controller.signal },
       )
         .then((r) => {
-          if (!controller.signal.aborted) setResults(r.data);
+          if (!controller.signal.aborted) {
+            setResults(r.data);
+            if (pendingSearch.current === query) {
+              pendingSearch.current = null;
+              if (r.data[0]) {
+                setQuery("");
+                router.push(
+                  "/intelligence/" + encodeURIComponent(r.data[0].id),
+                );
+              } else void investigate(query);
+            }
+          }
         })
         .catch((e) => {
           if (!controller.signal.aborted)
@@ -88,6 +107,9 @@ function WorkspaceShell({ children }: { children: React.ReactNode }) {
                 ? e.message
                 : "We couldn’t search intelligence. Please try again.",
             );
+        })
+        .finally(() => {
+          if (!controller.signal.aborted) setSearching(false);
         });
     }, 250);
     return () => {
@@ -209,10 +231,19 @@ function WorkspaceShell({ children }: { children: React.ReactNode }) {
               key={item.href}
               href={item.href}
               onClick={() => setOpen(false)}
+              aria-current={
+                path === item.href ||
+                (item.href === "/intelligence" &&
+                  path.startsWith("/intelligence/"))
+                  ? "page"
+                  : undefined
+              }
               className={
                 "nav-link " +
                 (path === item.href ||
-                (item.href === "/" && path.startsWith("/investigations"))
+                (item.href === "/" && path.startsWith("/investigations")) ||
+                (item.href === "/intelligence" &&
+                  path.startsWith("/intelligence/"))
                   ? "active"
                   : "")
               }
@@ -253,6 +284,9 @@ function WorkspaceShell({ children }: { children: React.ReactNode }) {
           </button>
         </div>
       </aside>
+      <a href="#main-content" className="skip-link">
+        Skip to main content
+      </a>
       <div className="main-shell" inert={open}>
         <header className="topbar">
           <button
@@ -267,8 +301,10 @@ function WorkspaceShell({ children }: { children: React.ReactNode }) {
             <strong>
               {path.startsWith("/investigations")
                 ? "Investigation"
-                : (navigation.find((n) => n.href === path)?.name ??
-                  "Threat operations")}
+                : path.startsWith("/intelligence")
+                  ? "Intelligence library"
+                  : (navigation.find((n) => n.href === path)?.name ??
+                    "Threat operations")}
             </strong>
           </div>
           <div className="global-search">
@@ -280,20 +316,59 @@ function WorkspaceShell({ children }: { children: React.ReactNode }) {
               aria-busy={me.loading}
               placeholder="Search IP, domain, hash, CVE…"
               value={query}
-              onChange={(e) => setQuery(e.target.value)}
+              aria-controls={
+                query.length >= 2 ? "global-search-results" : undefined
+              }
+              onChange={(e) => {
+                pendingSearch.current = null;
+                setQuery(e.target.value);
+                setSearching(e.target.value.length >= 2);
+              }}
               onKeyDown={(e) => {
-                if (e.key === "Enter" && query) void investigate(query);
-                if (e.key === "Escape") setQuery("");
+                if (e.key === "ArrowDown" || e.key === "ArrowUp") {
+                  e.preventDefault();
+                  setActiveResult((i) =>
+                    e.key === "ArrowDown"
+                      ? Math.min(results.length - 1, i + 1)
+                      : Math.max(0, i - 1),
+                  );
+                }
+                if (e.key === "Enter" && query && searching)
+                  pendingSearch.current = query;
+                if (e.key === "Enter" && query && !searching) {
+                  const result = results[activeResult >= 0 ? activeResult : 0];
+                  if (result) {
+                    setQuery("");
+                    router.push(
+                      "/intelligence/" + encodeURIComponent(result.id),
+                    );
+                  } else void investigate(query);
+                }
+                if (e.key === "Escape") {
+                  pendingSearch.current = null;
+                  setQuery("");
+                }
               }}
             />
             <kbd>
               <Command size={11} /> K
             </kbd>
             {query.length >= 2 && (
-              <div className="search-results">
-                {results.map((r) => (
+              <div className="search-results" id="global-search-results">
+                <span className="sr-only" role="status">
+                  {activeResult >= 0 ? results[activeResult]?.name : ""}
+                </span>
+                {searching && <p role="status">Searching intelligence…</p>}
+                {!searching && !results.length && !searchError && (
+                  <p role="status">
+                    No matching intelligence. You can assess a new observable
+                    below.
+                  </p>
+                )}
+                {results.map((r, index) => (
                   <button
                     key={r.id}
+                    className={index === activeResult ? "search-active" : ""}
                     onClick={() => {
                       setQuery("");
                       router.push("/intelligence/" + encodeURIComponent(r.id));
@@ -327,7 +402,11 @@ function WorkspaceShell({ children }: { children: React.ReactNode }) {
           )}
           <span className="top-status">
             <span className={me.error ? "status-dot warning" : "status-dot"} />
-            {me.error ? "Connection issue" : "Workspace connected"}
+            {me.error
+              ? "Connection issue"
+              : me.loading
+                ? "Connecting…"
+                : "Workspace connected"}
           </span>
         </header>
         <main id="main-content">

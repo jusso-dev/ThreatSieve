@@ -125,7 +125,9 @@ test("ThreatFox to ATT&CK candidates to classification preserves full model prov
   expect(repeated.runs).toEqual(a.runs);
   await browser.goto("/investigations/" + a.assessment_id);
   await expect(screen.getByRole("heading", feedDomain)).toBeVisible();
-  await expect(screen.getByText("ThreatFox", { exact: true })).toBeVisible();
+  await expect(
+    browser.locator(".evidence-header").getByText("ThreatFox", { exact: true }),
+  ).toBeVisible();
 });
 test("disabled optional sources explain their status and reject sync attempts", async ({
   browser,

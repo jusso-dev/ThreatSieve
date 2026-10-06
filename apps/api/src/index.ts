@@ -23,7 +23,12 @@ import {
   rateLimit,
   createApiKey,
 } from "../../../packages/auth/src/index";
-import { AssessmentView } from "../../../packages/database/src/assessment-query";
+import { encodeAssessmentCursor } from "../../../packages/database/src/assessment-query";
+import {
+  AssessmentFilters,
+  EntityFilters,
+  SavedViewInput,
+} from "../../../packages/schemas/src/query";
 import { Repository } from "../../../packages/database/src/repository";
 import {
   AppError,
@@ -510,25 +515,19 @@ app.get("/v1/assessments", scope("assessment:read"), async (c) => {
     .parse(c.req.query("limit") ?? 50);
   const repo = new Repository(c.env.DB);
   const tenant = c.get("principal").tenantId;
-  const view = AssessmentView.parse(c.req.query("view") ?? "all");
-  const q = z
-    .string()
-    .max(256)
-    .parse(c.req.query("q") ?? "");
-  const data = await repo.assessments(tenant, limit, c.req.query("cursor"), {
-    view,
-    q,
-  });
+  const filters = AssessmentFilters.parse(c.req.query());
+  const rows = await repo.assessments(
+    tenant,
+    limit + 1,
+    z.string().max(2000).optional().parse(c.req.query("cursor")),
+    filters,
+  );
+  const data = rows.slice(0, limit);
   return c.json({
     data,
     next_cursor:
-      data.length === limit
-        ? btoa(
-            JSON.stringify([
-              data.at(-1)!.created_at,
-              data.at(-1)!.assessment_id,
-            ]),
-          )
+      rows.length > limit
+        ? encodeAssessmentCursor(data.at(-1)!, filters.sort)
         : null,
     ...(await repo.assessmentSummary(tenant)),
   });
@@ -626,14 +625,24 @@ for (const [route, type] of [
       .max(100)
       .parse(c.req.query("limit") ?? 50);
     const rows = await c.env.DB.prepare(
-      "SELECT data FROM entities WHERE type=? AND id>? ORDER BY id LIMIT ?",
+      "SELECT e.data FROM entities e WHERE e.type=? AND e.id>? AND (e.public_intel=1 OR EXISTS(SELECT 1 FROM tenant_observables t WHERE t.tenant_id=? AND t.observable_id=e.id)) ORDER BY e.id LIMIT ?",
     )
-      .bind(type, c.req.query("cursor") ?? "", limit)
+      .bind(
+        type,
+        z
+          .string()
+          .max(200)
+          .parse(c.req.query("cursor") ?? ""),
+        c.get("principal").tenantId,
+        limit + 1,
+      )
       .all<{ data: string }>();
-    const data = rows.results.map((r) => JSON.parse(r.data) as { id: string });
+    const data = rows.results
+      .slice(0, limit)
+      .map((r) => JSON.parse(r.data) as { id: string });
     return c.json({
       data,
-      next_cursor: data.length === limit ? data.at(-1)?.id : null,
+      next_cursor: rows.results.length > limit ? data.at(-1)!.id : null,
     });
   });
   app.get("/v1/" + route + "/:id", scope("intel:read"), async (c) => {
@@ -643,7 +652,11 @@ for (const [route, type] of [
       entity?.type === type
         ? entity
         : (await repo.resolveAlias(c.req.param("id")!, type))[0];
-    if (!resolved) throw new AppError("NOT_FOUND", 404, "Entity not found");
+    if (
+      !resolved ||
+      !(await repo.visible(c.get("principal").tenantId, resolved.id))
+    )
+      throw new AppError("NOT_FOUND", 404, "Entity not found");
     return c.json({
       entity: resolved,
       relationships: await repo.edges(
@@ -654,28 +667,88 @@ for (const [route, type] of [
     });
   });
 }
+app.get("/v1/entities", scope("intel:read"), async (c) => {
+  return c.json(
+    await new Repository(c.env.DB).browseEntities(
+      c.get("principal").tenantId,
+      EntityFilters.parse(c.req.query()),
+    ),
+  );
+});
 app.get("/v1/search", scope("intel:read"), async (c) => {
   const q = z.string().trim().min(1).max(256).parse(c.req.query("q"));
-  const exact = await new Repository(c.env.DB).resolveAlias(q);
+  return c.json(
+    await new Repository(c.env.DB).browseEntities(c.get("principal").tenantId, {
+      q,
+      limit: 30,
+    }),
+  );
+});
+app.get("/v1/saved-views", scope("assessment:read"), async (c) => {
+  const p = c.get("principal");
   const rows = await c.env.DB.prepare(
-    "SELECT data FROM entities WHERE name LIKE ? ESCAPE '\\' ORDER BY name LIMIT 30",
+    "SELECT id,name,filters,created_at FROM saved_views WHERE tenant_id=? AND user_id=? ORDER BY created_at DESC,id LIMIT 50",
   )
-    .bind(q.replace(/[\\%_]/g, "\\$&") + "%")
-    .all<{ data: string }>();
-  const candidates = [
-    ...new Map(
-      [
-        ...exact,
-        ...rows.results.map((r) => JSON.parse(r.data) as { id: string }),
-      ].map((r) => [r.id, r]),
-    ).values(),
-  ];
-  const repo = new Repository(c.env.DB);
-  const data = [];
-  for (const item of candidates)
-    if (await repo.visible(c.get("principal").tenantId, item.id))
-      data.push(item);
-  return c.json({ data });
+    .bind(p.tenantId, p.userId)
+    .all<{ id: string; name: string; filters: string; created_at: string }>();
+  return c.json({
+    data: rows.results.map((row) => ({
+      ...row,
+      filters: AssessmentFilters.parse(JSON.parse(row.filters)),
+    })),
+  });
+});
+app.post("/v1/saved-views", scope("assessment:read"), async (c) => {
+  const input = SavedViewInput.parse(await json(c));
+  const p = c.get("principal");
+  const id = crypto.randomUUID();
+  const result = await c.env.DB.prepare(
+    "INSERT INTO saved_views(id,tenant_id,user_id,name,filters,created_at) SELECT ?,?,?,?,?,? WHERE (SELECT COUNT(*) FROM saved_views WHERE tenant_id=? AND user_id=?)<50 OR EXISTS(SELECT 1 FROM saved_views WHERE tenant_id=? AND user_id=? AND name=?) ON CONFLICT(tenant_id,user_id,name) DO UPDATE SET filters=excluded.filters",
+  )
+    .bind(
+      id,
+      p.tenantId,
+      p.userId,
+      input.name,
+      JSON.stringify(input.filters),
+      new Date().toISOString(),
+      p.tenantId,
+      p.userId,
+      p.tenantId,
+      p.userId,
+      input.name,
+    )
+    .run();
+  if (!result.meta.changes)
+    throw new AppError(
+      "VIEW_LIMIT",
+      409,
+      "You have 50 saved views. Remove a view before saving another.",
+    );
+  await new Repository(c.env.DB).audit(
+    p,
+    "view.saved",
+    input.name,
+    c.get("requestId"),
+  );
+  return c.json({ status: "saved" }, 201);
+});
+app.delete("/v1/saved-views/:id", scope("assessment:read"), async (c) => {
+  const p = c.get("principal");
+  const result = await c.env.DB.prepare(
+    "DELETE FROM saved_views WHERE id=? AND tenant_id=? AND user_id=?",
+  )
+    .bind(c.req.param("id"), p.tenantId, p.userId)
+    .run();
+  if (!result.meta.changes)
+    throw new AppError("NOT_FOUND", 404, "Saved view not found");
+  await new Repository(c.env.DB).audit(
+    p,
+    "view.deleted",
+    c.req.param("id")!,
+    c.get("requestId"),
+  );
+  return c.json({ status: "deleted" });
 });
 app.get("/v1/entities/:id", scope("intel:read"), async (c) => {
   const repo = new Repository(c.env.DB);
@@ -729,11 +802,9 @@ app.get("/v1/graph/:id", scope("intel:read"), async (c) => {
   for (let i = 0; i < depth; i++) {
     const next: string[] = [];
     for (const id of frontier) {
-      for (const edge of await repo.edges(
-        id,
-        30,
-        c.get("principal").tenantId,
-      )) {
+      const adjacent = await repo.edges(id, 31, c.get("principal").tenantId);
+      if (adjacent.length > 30) truncated = true;
+      for (const edge of adjacent.slice(0, 30)) {
         if (nodes.size >= 100 || edges.size >= 200) {
           truncated = true;
           break;

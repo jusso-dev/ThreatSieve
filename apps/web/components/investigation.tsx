@@ -5,14 +5,12 @@ import Link from "next/link";
 import { useState } from "react";
 import {
   ArrowLeft,
-  ArrowRight,
+  Copy,
   Download,
   Check,
   X,
   ShieldCheck,
   Activity,
-  Network,
-  FileSearch,
   Crosshair,
   CheckCircle2,
   HelpCircle,
@@ -24,12 +22,18 @@ import { DataState } from "./shell";
 import { Modal } from "./ui/modal";
 import { Button } from "./ui/button";
 import { Severity } from "./operations";
-import type {
-  Assessment,
-  IntelEntity,
-  IntelRelationship,
-} from "../../../packages/schemas/src/index";
-export function Investigation({ id }: { id: string }) {
+import type { Assessment } from "../../../packages/schemas/src/index";
+import { IntelligenceGraph } from "./intelligence-graph";
+import { EvidenceExplorer } from "./evidence-explorer";
+import { copyText, defang } from "@/lib/view-state";
+import { ReassessmentProgress } from "./reassessment-progress";
+export function Investigation({
+  id,
+  returnTo = "/",
+}: {
+  id: string;
+  returnTo?: string;
+}) {
   const canWrite = usePermission("assessment:write");
   const {
     data: a,
@@ -43,6 +47,9 @@ export function Investigation({ id }: { id: string }) {
   const [override, setOverride] = useState("unknown");
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState("");
+  const [evidenceIds, setEvidenceIds] = useState<string[]>([]);
+  const [reassessing, setReassessing] = useState(false);
+  const [reassessmentJob, setReassessmentJob] = useState("");
   if (loading || error || !a)
     return <DataState loading={loading} error={error} />;
   const beginFeedback = (action: string) => {
@@ -75,7 +82,7 @@ export function Investigation({ id }: { id: string }) {
   };
   return (
     <>
-      <Link className="back-link" href="/">
+      <Link className="back-link" href={returnTo}>
         <ArrowLeft size={13} />
         Threat operations
       </Link>
@@ -112,6 +119,18 @@ export function Investigation({ id }: { id: string }) {
           </div>
         </div>
         <div className="actions">
+          <Button
+            variant="outline"
+            onClick={() =>
+              void copyText(
+                defang(a.observable.normalizedValue),
+                "Defanged observable copied for safe sharing.",
+              )
+            }
+          >
+            <Copy size={14} />
+            Copy defanged
+          </Button>
           <Button variant="outline" asChild>
             <a
               href={"/api/v1/assessments/" + id + "/stix"}
@@ -146,20 +165,22 @@ export function Investigation({ id }: { id: string }) {
           </Button>
           <Button
             variant="outline"
-            disabled={!canWrite}
+            disabled={!canWrite || reassessing}
             onClick={() => {
+              setReassessing(true);
               void api<{ job_id: string }>(
                 "v1/assessments/" + id + "/reclassify",
                 { method: "POST" },
               )
-                .then((r) => setMessage("Reclassification queued: " + r.job_id))
+                .then((r) => setReassessmentJob(r.job_id))
                 .catch((e) =>
                   setMessage(
                     e instanceof Error
                       ? e.message
                       : "We couldn’t queue reclassification. Please try again.",
                   ),
-                );
+                )
+                .finally(() => setReassessing(false));
             }}
           >
             <RefreshCw size={14} />
@@ -173,6 +194,9 @@ export function Investigation({ id }: { id: string }) {
           Synthetic demonstration. These probabilities illustrate the workflow
           and are not a live Clef result.
         </div>
+      )}
+      {reassessmentJob && (
+        <ReassessmentProgress key={reassessmentJob} jobId={reassessmentJob} />
       )}
       {message && (
         <div className="notice" role="status">
@@ -189,9 +213,18 @@ export function Investigation({ id }: { id: string }) {
           <small>Original model probabilities remain visible below.</small>
         </div>
       )}
+      <nav className="investigation-jumps" aria-label="Investigation sections">
+        <a href="#decision">Decision</a>
+        <a href="#evidence">
+          Evidence <span>{a.evidence.length}</span>
+        </a>
+        <a href="#relationships">Relationships</a>
+        <a href="#model-provenance">Model provenance</a>
+        <a href="#analyst-review">Analyst review</a>
+      </nav>
       <div className="investigation-grid">
         <div>
-          <section className="panel">
+          <section className="panel" id="decision">
             <h2>
               <ShieldCheck size={17} />
               Original model decision
@@ -201,8 +234,8 @@ export function Investigation({ id }: { id: string }) {
                 {[
                   ["Malicious", a.malicious.probability],
                   [
-                    "Command & control",
-                    a.role.value === "c2" ? a.role.probability : 0,
+                    a.role.value === "c2" ? "Command & control" : a.role.value,
+                    a.role.probability,
                   ],
                   ["Human review", a.human_review_probability],
                 ].map(([label, value]) => (
@@ -272,68 +305,13 @@ export function Investigation({ id }: { id: string }) {
               </p>
             </details>
           </section>
-          <section className="panel">
-            <h2>
-              <FileSearch size={17} />
-              Evidence & provenance{" "}
-              <span className="count-badge">{a.evidence.length}</span>
-            </h2>
-            <div className="evidence-list">
-              {a.evidence.map((e) => (
-                <article className="evidence-item" key={e.id}>
-                  <div className="evidence-header">
-                    <span className="source-icon">
-                      {e.provenance.sourceName.slice(0, 2).toUpperCase()}
-                    </span>
-                    <strong>{e.provenance.sourceName}</strong>
-                    <small>
-                      {e.observedAt
-                        ? relativeTime(e.observedAt)
-                        : "Observation time unavailable"}
-                    </small>
-                  </div>
-                  <p>
-                    {typeof e.data.description === "string"
-                      ? e.data.description
-                      : typeof e.data.role === "string"
-                        ? "Source reports role: " + e.data.role
-                        : "Source-provided intelligence record"}
-                  </p>
-                  <div className="evidence-tags">
-                    <span>{e.type}</span>
-                    <span>{percent(e.confidence)} source confidence</span>
-                    <span>
-                      {e.behavioural
-                        ? "Behavioural evidence"
-                        : "Contextual evidence"}
-                    </span>
-                  </div>
-                  <details style={{ marginTop: 9 }}>
-                    <summary>View original fields and provenance</summary>
-                    <pre>
-                      {JSON.stringify(
-                        {
-                          data: e.data,
-                          provenance: e.provenance,
-                          rawKey: e.rawKey,
-                        },
-                        null,
-                        2,
-                      )}
-                    </pre>
-                  </details>
-                </article>
-              ))}
-            </div>
-            {!a.evidence.length && (
-              <p className="muted">
-                No supporting source evidence is currently available. Unknown is
-                the appropriate outcome.
-              </p>
-            )}
-          </section>
-          <Graph entityId={a.observable.id} />
-          <section className="panel">
+          <EvidenceExplorer
+            evidence={a.evidence}
+            selectedIds={evidenceIds}
+            onClear={() => setEvidenceIds([])}
+          />
+          <IntelligenceGraph entityId={a.observable.id} />
+          <section className="panel" id="model-provenance">
             <h2>
               <Activity size={17} />
               Model & decision provenance
@@ -408,7 +386,12 @@ export function Investigation({ id }: { id: string }) {
               a.attack.map((m) => (
                 <div className="attack-item" key={m.techniqueId}>
                   <div>
-                    <span className="mono">{m.techniqueId}</span>
+                    <Link
+                      className="mono text-link"
+                      href={"/intelligence/" + encodeURIComponent(m.entityId)}
+                    >
+                      {m.techniqueId}
+                    </Link>
                     <strong>{percent(m.probability)}</strong>
                   </div>
                   <div className="probability-bar">
@@ -416,7 +399,19 @@ export function Investigation({ id }: { id: string }) {
                   </div>
                   <small>
                     {m.status} · {m.mappingType.replaceAll("_", " ")} ·{" "}
-                    {m.evidenceIds.length} evidence records
+                    <button
+                      className="text-link"
+                      onClick={() => {
+                        setEvidenceIds(m.evidenceIds);
+                        document.getElementById("evidence")?.focus();
+                        document.getElementById("evidence")?.scrollIntoView({
+                          behavior: "smooth",
+                          block: "start",
+                        });
+                      }}
+                    >
+                      {m.evidenceIds.length} evidence records
+                    </button>
                   </small>
                 </div>
               ))
@@ -459,6 +454,7 @@ export function Investigation({ id }: { id: string }) {
             </p>
           </section>
           <section
+            id="analyst-review"
             className={"panel " + (a.human_review ? "review-panel" : "")}
           >
             <h2>Analyst decision</h2>
@@ -585,75 +581,5 @@ export function Investigation({ id }: { id: string }) {
         </Modal>
       )}
     </>
-  );
-}
-function Graph({ entityId }: { entityId: string }) {
-  const { data, error, loading } = useApi<{
-    nodes: IntelEntity[];
-    edges: IntelRelationship[];
-    truncated: boolean;
-  }>("v1/graph/" + entityId + "?depth=2");
-  const [selected, setSelected] = useState<IntelEntity>();
-  return (
-    <section className="panel">
-      <h2>
-        <Network size={17} />
-        Intelligence graph
-      </h2>
-      <p className="panel-subtitle">
-        Source-backed relationships. Select a node to inspect its provenance.
-      </p>
-      <DataState loading={loading} error={error} />
-      {data && (
-        <>
-          <div className="graph">
-            <button
-              className="graph-node graph-root"
-              onClick={() => setSelected(data.nodes[0])}
-            >
-              <small>{data.nodes[0]?.type}</small>
-              <strong>{data.nodes[0]?.name}</strong>
-            </button>
-            <div className="graph-connection">
-              {data.edges.length ? "related intelligence" : "no relationships"}
-              <ArrowRight size={30} />
-            </div>
-            <div className="graph-branch">
-              {data.nodes.slice(1, 9).map((node) => (
-                <button
-                  className="graph-node"
-                  key={node.id}
-                  onClick={() => setSelected(node)}
-                >
-                  <small>{node.type}</small>
-                  <strong>
-                    {node.externalId ? node.externalId + " · " : ""}
-                    {node.name}
-                  </strong>
-                </button>
-              ))}
-            </div>
-          </div>
-          {selected && (
-            <div className="notice">
-              <strong>{selected.name}</strong>
-              <p style={{ marginTop: 5 }}>
-                {selected.description.slice(0, 600)}
-              </p>
-              <small>
-                Source: {selected.provenance.sourceName} ·{" "}
-                {selected.provenance.sourceRecordId ?? selected.id}
-              </small>
-            </div>
-          )}
-          {data.truncated && (
-            <p className="tooltip-note">
-              Graph view limited to 100 nodes. Narrow the investigation to
-              explore further.
-            </p>
-          )}
-        </>
-      )}
-    </section>
   );
 }

@@ -42,7 +42,10 @@ Sync MITRE first, then MISP, then indicator feeds so canonical knowledge is avai
 - Behaviour-gated ATT&CK mappings, conservative actor associations, structured confidence factors and customer relevance.
 - Better Auth accounts, verified email, team invitations, admin/analyst/viewer roles, password recovery, scoped API keys and tenant isolation.
 - Accessible toast notifications and actionable inline messages throughout analyst workflows.
-- Analyst operations, search, investigation, evidence inspection, clickable graph nodes, confirm/reject/modify/investigate, bulk upload, sources, clusters and environment profile.
+- Filterable analyst queue with server-side sorting, bookmarkable filters and personal saved triage views.
+- Intelligence library with source/category filters, canonical aliases and MITRE-ID search.
+- Investigation evidence search/timeline, directed graph and relationship list, ATT&CK-to-evidence pivots and defanged copying.
+- Confirm/reject/modify/investigate, bulk upload, expandable source health, clusters and environment profile.
 - Asynchronous processing, D1 outbox, job leases, retry/dead-letter handling and replay.
 - STIX 2.1 export and a Python OpenCTI connector using `OpenCTIConnectorHelper.send_stix2_bundle`.
 - Optional provider adapters for OTX, VirusTotal, GreyNoise, TAXII, STIX and MISP; disabled unless explicitly configured.
@@ -61,7 +64,7 @@ Sync MITRE first, then MISP, then indicator feeds so canonical knowledge is avai
 | `pnpm build`                                          | Worker dry-run bundle and Next.js production build               |
 | `pnpm eval`                                           | Evaluation fixture self-check; emits `artifacts/evaluation.json` |
 | `pnpm security`                                       | Repository security checks                                       |
-| `pnpm deploy`                                         | Configured staging deployment; see deployment guide              |
+| `pnpm run deploy`                                     | Configured staging deployment; see deployment guide              |
 | `pnpm tenant:create 'Organisation' admin@example.com` | Provision a local tenant and one-time key                        |
 
 For browser tests, run `pnpm exec e2e-web install chromium` once, then `pnpm test:e2e`. The suite starts its own production web build and ephemeral Workers/D1/R2/Queues environment; no bootstrap, Cloudflare login, feed credentials or model API key is needed. See [end-to-end testing](docs/e2e.md) for coverage and diagnostics. The earlier Playwright regressions remain available as `pnpm test:playwright` against the local demo (CI starts that demo automatically). Tests never use live intelligence APIs. `pnpm eval --current current.json --candidate candidate.json` compares measured predictions. Default fixture metrics are **not a claim about Clef accuracy**.
@@ -85,6 +88,14 @@ Captured from the running application with the labelled synthetic demo dataset. 
 ### Investigation, evidence and intelligence graph
 
 ![Investigation showing model probabilities, evidence provenance, the intelligence graph and analyst decisions](docs/images/investigation.png)
+
+### Intelligence library
+
+![Intelligence library with category navigation, aliases, source filtering and canonical entity records](docs/images/intelligence-library.png)
+
+| Mobile library                                                                                                                         | Mobile investigation                                                                                                            |
+| -------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------- |
+| <img src="docs/images/intelligence-library-mobile.png" width="320" alt="Mobile intelligence library with accessible category filters"> | <img src="docs/images/investigation-mobile.png" width="320" alt="Responsive evidence, relationships and analyst investigation"> |
 
 ### Bulk analysis
 
@@ -120,4 +131,4 @@ Captured from the running application with the labelled synthetic demo dataset. 
 
 ## Documentation
 
-[Accounts and teams](docs/authentication.md) · [Architecture](docs/architecture.md) · [Threat model](docs/threat-model.md) · [Classification](docs/classification.md) · [Confidence](docs/confidence-model.md) · [Sources](docs/intelligence-sources.md) · [Data model](docs/data-model.md) · [API](docs/api.md) · [OpenCTI](docs/opencti.md) · [Deployment](docs/deployment.md) · [Commercial architecture](docs/commercial-architecture.md)
+[TIP UX review and design decisions](docs/tip-ux-review.md) · [All 244 reference entries](docs/research/catalogue.md) · [Accounts and teams](docs/authentication.md) · [Architecture](docs/architecture.md) · [Threat model](docs/threat-model.md) · [Classification](docs/classification.md) · [Confidence](docs/confidence-model.md) · [Sources](docs/intelligence-sources.md) · [Data model](docs/data-model.md) · [API](docs/api.md) · [OpenCTI](docs/opencti.md) · [Deployment](docs/deployment.md) · [Commercial architecture](docs/commercial-architecture.md)

@@ -20,11 +20,12 @@ import { aliasKey } from "../../intel/src/normalise";
 import { AppError } from "../../observability/src/index";
 import {
   assessmentFilter,
-  assessmentCursor,
+  sortedCursor,
+  assessmentOrders,
   attentionPredicate,
   reviewPredicate,
-  type AssessmentView,
 } from "./assessment-query";
+import { AssessmentFilters, EntityFilters } from "../../schemas/src/query";
 export class Repository {
   constructor(readonly db: D1Database) {}
   async observable(id: string) {
@@ -283,19 +284,128 @@ export class Repository {
     tenantId: string,
     limit = 50,
     cursor?: string,
-    options: { view?: AssessmentView; q?: string } = {},
+    options: Partial<AssessmentFilters> = {},
   ) {
-    const [time, id] = assessmentCursor(cursor);
-    const q = (options.q ?? "").toLowerCase();
+    const filters = AssessmentFilters.parse(options);
+    const [value, id] = sortedCursor(cursor, filters.sort);
+    const order = assessmentOrders[filters.sort];
+    const predicates = ["tenant_id=?", assessmentFilter(filters.view)];
+    const args: (string | number | null)[] = [tenantId];
+    const add = (sql: string, value: string | number | undefined) => {
+      if (value !== undefined) {
+        predicates.push(sql);
+        args.push(value);
+      }
+    };
+    if (filters.q)
+      add(
+        "instr(lower(json_extract(data,'$.observable.normalizedValue')),?)>0",
+        filters.q.toLowerCase(),
+      );
+    add("severity=?", filters.severity);
+    add(
+      "COALESCE(json_extract(data,'$.effective_classification'),json_extract(data,'$.malicious.classification'))=?",
+      filters.classification,
+    );
+    add("json_extract(data,'$.observable.type')=?", filters.observable_type);
+    add("status=?", filters.status);
+    add("json_extract(data,'$.confidence')>=?", filters.min_confidence);
+    add(
+      "json_extract(data,'$.customer.observed')=?",
+      filters.observed === undefined
+        ? undefined
+        : Number(filters.observed === "yes"),
+    );
+    if (value !== null) {
+      predicates.push(
+        `(${order.column}${order.direction === "DESC" ? "<" : ">"}? OR (${order.column}=? AND id>?))`,
+      );
+      args.push(value, value, id);
+    }
     const rows = await this.db
       .prepare(
-        "SELECT data FROM assessments WHERE tenant_id=? AND " +
-          assessmentFilter(options.view) +
-          " AND (?='' OR instr(lower(json_extract(data,'$.observable.normalizedValue')),?)>0) AND (? IS NULL OR created_at<? OR (created_at=? AND id>?)) ORDER BY created_at DESC,id LIMIT ?",
+        `SELECT data FROM assessments WHERE ${predicates.join(" AND ")} ORDER BY ${order.column} ${order.direction},id LIMIT ?`,
       )
-      .bind(tenantId, q, q, time, time, time, id, limit)
+      .bind(...args, limit)
       .all<{ data: string }>();
     return rows.results.map((row) => JSON.parse(row.data) as Assessment);
+  }
+  async browseEntities(tenantId: string, input: Partial<EntityFilters> = {}) {
+    const filters = EntityFilters.parse(input);
+    const predicates = [
+      "(e.public_intel=1 OR EXISTS(SELECT 1 FROM tenant_observables t WHERE t.tenant_id=? AND t.observable_id=e.id))",
+    ];
+    const args: (string | number)[] = [tenantId];
+    if (filters.type) {
+      predicates.push("e.type=?");
+      args.push(filters.type);
+    }
+    if (filters.source) {
+      predicates.push(
+        "EXISTS(SELECT 1 FROM entity_sources s WHERE s.entity_id=e.id AND s.source_id=?)",
+      );
+      args.push(filters.source);
+    }
+    if (filters.q) {
+      // D1 limits LIKE patterns to 50 bytes. Indexed prefix ranges also treat
+      // wildcard characters literally and support long hashes and URLs.
+      const alias = aliasKey(filters.q);
+      const upper = String.fromCodePoint(0x10ffff);
+      predicates.push(
+        "e.id IN (SELECT id FROM entities WHERE name COLLATE NOCASE >= ? AND name COLLATE NOCASE < ? UNION SELECT id FROM entities WHERE external_id COLLATE NOCASE >= ? AND external_id COLLATE NOCASE < ? UNION SELECT entity_id FROM entity_aliases WHERE alias >= ? AND alias < ?)",
+      );
+      args.push(
+        filters.q,
+        filters.q + upper,
+        filters.q,
+        filters.q + upper,
+        alias,
+        alias + upper,
+      );
+    }
+    if (filters.cursor) {
+      try {
+        const { id } = z
+          .object({ id: z.string().min(1).max(200) })
+          .parse(JSON.parse(decodeURIComponent(atob(filters.cursor))));
+        const row = await this.db
+          .prepare(
+            "SELECT name FROM entities e WHERE e.id=? AND (e.public_intel=1 OR EXISTS(SELECT 1 FROM tenant_observables t WHERE t.tenant_id=? AND t.observable_id=e.id))",
+          )
+          .bind(id, tenantId)
+          .first<{ name: string }>();
+        if (!row) throw new Error("Unavailable cursor");
+        const name = row.name;
+        predicates.push(
+          "(e.name COLLATE NOCASE > ? OR (e.name COLLATE NOCASE = ? AND e.id>?))",
+        );
+        args.push(name, name, id);
+      } catch {
+        throw new AppError(
+          "INVALID_CURSOR",
+          400,
+          "Invalid intelligence pagination cursor",
+        );
+      }
+    }
+    const rows = await this.db
+      .prepare(
+        `SELECT e.data FROM entities e WHERE ${predicates.join(" AND ")} ORDER BY e.name COLLATE NOCASE,e.id LIMIT ?`,
+      )
+      .bind(...args, filters.limit + 1)
+      .all<{ data: string }>();
+    const entities = rows.results.map((row) =>
+      EntitySchema.parse(JSON.parse(row.data)),
+    );
+    const data = entities.slice(0, filters.limit);
+    const last = data.at(-1);
+    return {
+      data,
+      next_cursor:
+        entities.length > filters.limit && last
+          ? btoa(encodeURIComponent(JSON.stringify({ id: last.id })))
+          : null,
+    };
   }
   async assessmentSummary(tenantId: string) {
     const counts = await this.db

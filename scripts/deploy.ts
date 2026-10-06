@@ -2,7 +2,7 @@ import { readFileSync, writeFileSync, mkdirSync } from "node:fs";
 import { execFileSync } from "node:child_process";
 if (process.argv.includes("--help")) {
   console.log(
-    "pnpm deploy [--config-only] [--production]. Requires CLOUDFLARE_ACCOUNT_ID, THREATSIEVE_D1_ID, THREATSIEVE_WEB_ORIGIN, THREATSIEVE_API_ORIGIN. Remote migrations are applied separately.",
+    "pnpm run deploy [--config-only] [--production]. Requires CLOUDFLARE_ACCOUNT_ID, THREATSIEVE_D1_ID, THREATSIEVE_WEB_ORIGIN, THREATSIEVE_API_ORIGIN. Remote migrations are applied separately.",
   );
   process.exit(0);
 }

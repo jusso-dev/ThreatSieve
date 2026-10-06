@@ -1,6 +1,6 @@
 "use client";
 import Link from "next/link";
-import { ArrowLeft, ArrowUpRight } from "lucide-react";
+import { ArrowLeft, ArrowUpRight, Copy } from "lucide-react";
 import { useApi } from "@/lib/api";
 import { DataState, PageHeader } from "./shell";
 import type {
@@ -8,6 +8,9 @@ import type {
   IntelRelationship,
   SourceProvenance,
 } from "../../../packages/schemas/src/index";
+import { IntelligenceGraph } from "./intelligence-graph";
+import { Button } from "./ui/button";
+import { copyText, defang } from "@/lib/view-state";
 export function IntelligenceDetail({ id }: { id: string }) {
   const { data, error, loading } = useApi<{
     entity: IntelEntity;
@@ -18,14 +21,30 @@ export function IntelligenceDetail({ id }: { id: string }) {
   const { entity, sources, relationships } = data;
   return (
     <>
-      <Link className="back-link" href="/">
+      <Link className="back-link" href="/intelligence">
         <ArrowLeft size={13} />
-        Threat operations
+        Intelligence library
       </Link>
       <PageHeader
         eyebrow={entity.type.toUpperCase()}
         title={entity.name}
         description={entity.externalId ?? "Source-backed intelligence entity"}
+        action={
+          <Button
+            variant="outline"
+            onClick={() =>
+              void copyText(
+                entity.type === "observable"
+                  ? defang(entity.name)
+                  : (entity.externalId ?? entity.name),
+                "Intelligence reference copied.",
+              )
+            }
+          >
+            <Copy size={14} />
+            {entity.type === "observable" ? "Copy defanged" : "Copy reference"}
+          </Button>
+        }
       />
       <div className="investigation-grid">
         <div>
@@ -63,7 +82,10 @@ export function IntelligenceDetail({ id }: { id: string }) {
                   style={{ padding: "16px 24px" }}
                 >
                   <div>
-                    <strong>{edge.relationshipType}</strong>
+                    <strong>
+                      {edge.sourceEntityId === id ? "Outgoing" : "Incoming"} ·{" "}
+                      {edge.relationshipType.replaceAll("_", " ")}
+                    </strong>
                     <p>
                       {edge.assertionType.replaceAll("_", " ")} ·{" "}
                       {Math.round(edge.confidence * 100)}% confidence
@@ -83,6 +105,7 @@ export function IntelligenceDetail({ id }: { id: string }) {
               ))
             )}
           </section>
+          <IntelligenceGraph entityId={id} />
         </div>
         <aside>
           <section className="panel">

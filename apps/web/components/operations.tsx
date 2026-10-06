@@ -1,18 +1,17 @@
 "use client";
 import { usePermission } from "@/lib/access";
 import Link from "next/link";
-import { useState, useEffect } from "react";
+import { useState } from "react";
 import { useRouter } from "next/navigation";
 import {
   ArrowUpRight,
   ArrowRight,
   Plus,
-  Filter,
+  Copy,
   ShieldAlert,
   Globe,
   Hash,
   Server,
-  Search,
   RefreshCw,
   CircleHelp,
   Layers,
@@ -30,6 +29,10 @@ import { Modal } from "./ui/modal";
 import { Button } from "./ui/button";
 import { PageHeader, DataState } from "./shell";
 import type { Assessment } from "../../../packages/schemas/src/index";
+import { useViewState, copyText } from "@/lib/view-state";
+import { QueryField, FilterSelect, EmptyResults } from "./filter-controls";
+import { SavedViews } from "./saved-views";
+import { AssessmentFilters } from "../../../packages/schemas/src/query";
 export function Severity({ value }: { value: string }) {
   return (
     <span className={"severity severity-" + value}>
@@ -40,32 +43,53 @@ export function Severity({ value }: { value: string }) {
 }
 export function Operations() {
   const canWrite = usePermission("assessment:write");
-  const [filter, setFilterValue] = useState("attention");
-  const [search, setSearch] = useState("");
-  const [query, setQuery] = useState("");
-  const [cursor, setCursor] = useState("");
+  const { params: urlParams, update } = useViewState();
+  const parsedFilters = AssessmentFilters.safeParse(
+    Object.fromEntries(urlParams),
+  );
+  const filters = parsedFilters.success
+    ? parsedFilters.data
+    : AssessmentFilters.parse({ view: "attention" });
+  if (!urlParams.has("view")) filters.view = "attention";
+  const filter = filters.view;
+  const investigationHref = (id: string) =>
+    "/investigations/" +
+    encodeURIComponent(id) +
+    "?return_to=" +
+    encodeURIComponent("/?" + urlParams.toString());
+  const cursor = urlParams.get("cursor") ?? "";
   const [history, setHistory] = useState<string[]>([]);
-  const setFilter = (value: string) => {
-    setFilterValue(value);
-    setCursor("");
+  const change = (key: string, value: string, replace = false) => {
     setHistory([]);
+    update({ [key]: value }, replace);
   };
-  useEffect(() => {
-    // Only a changed search should reset pagination, never the initial mount.
-    if (search === query) return;
-    const timer = setTimeout(() => {
-      setQuery(search);
-      setCursor("");
-      setHistory([]);
-    }, 250);
-    return () => clearTimeout(timer);
-  }, [search, query]);
-  const params = new URLSearchParams({
-    view: filter,
-    q: query,
-    limit: "50",
-    ...(cursor ? { cursor } : {}),
-  });
+  const setFilter = (value: string) => change("view", value);
+  const apply = (next: AssessmentFilters) => {
+    setHistory([]);
+    update(
+      Object.fromEntries(
+        [
+          "view",
+          "q",
+          "severity",
+          "classification",
+          "observable_type",
+          "status",
+          "min_confidence",
+          "observed",
+          "sort",
+        ].map((key) => [
+          key,
+          String(next[key as keyof AssessmentFilters] ?? ""),
+        ]),
+      ),
+    );
+  };
+  const params = new URLSearchParams(
+    Object.entries(filters).map(([key, value]) => [key, String(value)]),
+  );
+  params.set("limit", "50");
+  if (cursor) params.set("cursor", cursor);
   const { data, error, loading, reload } = useApi<{
     data: Assessment[];
     next_cursor: string | null;
@@ -99,7 +123,7 @@ export function Operations() {
       accessorKey: "observable.normalizedValue",
       cell: ({ row }) => (
         <Link
-          href={"/investigations/" + row.original.assessment_id}
+          href={investigationHref(row.original.assessment_id)}
           className="observable-cell"
         >
           <span className="observable-icon">
@@ -163,6 +187,14 @@ export function Operations() {
       ),
     },
     {
+      header: "Review",
+      cell: ({ row }) => (
+        <span className={"review-status status-" + row.original.status}>
+          {row.original.status.replaceAll("-", " ")}
+        </span>
+      ),
+    },
+    {
       header: "Sources",
       cell: ({ row }) => (
         <span className="source-count">
@@ -172,7 +204,7 @@ export function Operations() {
       ),
     },
     {
-      header: "Updated",
+      header: "Assessed",
       cell: ({ row }) => (
         <span className="muted mono">
           {relativeTime(row.original.created_at)}
@@ -185,7 +217,7 @@ export function Operations() {
       cell: ({ row }) => (
         <Link
           aria-label={"Investigate " + row.original.observable.normalizedValue}
-          href={"/investigations/" + row.original.assessment_id}
+          href={investigationHref(row.original.assessment_id)}
         >
           <ArrowUpRight size={17} />
         </Link>
@@ -206,7 +238,7 @@ export function Operations() {
         method: "POST",
         body: JSON.stringify({ observable }),
       });
-      router.push("/investigations/" + a.assessment_id);
+      router.push(investigationHref(a.assessment_id));
     } catch (e) {
       setAssessError(e instanceof Error ? e.message : "Assessment failed");
     } finally {
@@ -264,16 +296,24 @@ export function Operations() {
           <strong>{summary.attention.toString().padStart(2, "0")}</strong>
           <small>Prioritised intelligence</small>
         </button>
-        <div>
+        <button
+          onClick={() =>
+            apply({ ...filters, view: "attention", severity: "critical" })
+          }
+        >
           <span className="text-red">Critical</span>
           <strong>{summary.critical.toString().padStart(2, "0")}</strong>
           <small>Immediate investigation</small>
-        </div>
-        <div>
+        </button>
+        <button
+          onClick={() =>
+            apply({ ...filters, view: "attention", severity: "high" })
+          }
+        >
           <span className="text-amber">High priority</span>
           <strong>{summary.high.toString().padStart(2, "0")}</strong>
           <small>Elevated threat activity</small>
-        </div>
+        </button>
         <button onClick={() => setFilter("review")}>
           <span>Analyst review</span>
           <strong>{summary.review.toString().padStart(2, "0")}</strong>
@@ -290,7 +330,7 @@ export function Operations() {
         </div>
       </section>
       <DataState loading={loading} error={error} />
-      {!loading && !error && (
+      {
         <>
           <div className="section-title">
             <h2>
@@ -304,7 +344,7 @@ export function Operations() {
               <Link
                 className={"priority-card priority-" + a.severity}
                 key={a.assessment_id}
-                href={"/investigations/" + a.assessment_id}
+                href={investigationHref(a.assessment_id)}
               >
                 <div className="priority-top">
                   <Severity value={a.severity} />
@@ -352,6 +392,7 @@ export function Operations() {
                 ].map(([id, label]) => (
                   <button
                     key={id}
+                    aria-pressed={filter === id}
                     className={filter === id ? "selected" : ""}
                     onClick={() => setFilter(id!)}
                   >
@@ -361,54 +402,186 @@ export function Operations() {
                 ))}
               </div>
               <div className="table-controls">
-                <div className="inline-search">
-                  <Search size={14} />
-                  <input
-                    aria-label="Filter observables"
-                    placeholder="Filter observables…"
-                    value={search}
-                    onChange={(e) => setSearch(e.target.value)}
-                  />
-                </div>
-                <Filter size={16} />
+                <SavedViews filters={filters} onApply={apply} />
               </div>
             </div>
-            {filtered.length ? (
-              <div className="table-scroll">
-                <table className="intel-table">
-                  <thead>
-                    {table.getHeaderGroups().map((group) => (
-                      <tr key={group.id}>
-                        {group.headers.map((header) => (
-                          <th key={header.id}>
-                            {flexRender(
-                              header.column.columnDef.header,
-                              header.getContext(),
-                            )}
-                          </th>
-                        ))}
-                      </tr>
-                    ))}
-                  </thead>
-                  <tbody>
-                    {table.getRowModel().rows.map((row) => (
-                      <tr key={row.id}>
-                        {row.getVisibleCells().map((cell) => (
-                          <td key={cell.id}>
-                            {flexRender(
-                              cell.column.columnDef.cell,
-                              cell.getContext(),
-                            )}
-                          </td>
-                        ))}
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
+            <div className="triage-filters">
+              <QueryField
+                label="Filter observables"
+                placeholder="Filter observables…"
+                value={filters.q}
+                onChange={(v) => change("q", v, true)}
+              />
+              <FilterSelect
+                label="Priority"
+                value={filters.severity ?? ""}
+                options={[
+                  ["", "Any priority"],
+                  ["critical", "Critical"],
+                  ["high", "High"],
+                  ["medium", "Medium"],
+                  ["low", "Low"],
+                  ["informational", "Informational"],
+                ]}
+                onChange={(v) => change("severity", v)}
+              />
+              <FilterSelect
+                label="Decision"
+                value={filters.classification ?? ""}
+                options={[
+                  ["", "Any decision"],
+                  ["malicious", "Malicious"],
+                  ["suspicious", "Suspicious"],
+                  ["benign", "Benign"],
+                  ["unknown", "Unknown"],
+                ]}
+                onChange={(v) => change("classification", v)}
+              />
+              <FilterSelect
+                label="Customer observation"
+                value={filters.observed ?? ""}
+                options={[
+                  ["", "All observations"],
+                  ["yes", "Observed internally"],
+                  ["no", "Not observed internally"],
+                ]}
+                onChange={(v) => change("observed", v)}
+              />
+              <FilterSelect
+                label="Sort assessments"
+                value={filters.sort}
+                options={[
+                  ["newest", "Newest first"],
+                  ["oldest", "Oldest first"],
+                  ["confidence", "Highest confidence"],
+                  ["relevance", "Most relevant"],
+                ]}
+                onChange={(v) => change("sort", v)}
+              />
+            </div>
+            <details className="advanced-filters">
+              <summary>More filters & view options</summary>
+              <div className="triage-filters">
+                <FilterSelect
+                  label="Observable type"
+                  value={filters.observable_type ?? ""}
+                  options={[
+                    ["", "Any type"],
+                    ...[
+                      "ipv4",
+                      "ipv6",
+                      "domain",
+                      "hostname",
+                      "url",
+                      "email",
+                      "sha256",
+                      "sha1",
+                      "md5",
+                      "cve",
+                      "ja3",
+                      "ja4",
+                      "certificate",
+                      "asn",
+                      "file",
+                      "process",
+                      "registry-key",
+                      "user-agent",
+                      "mutex",
+                    ].map((v) => [v, v] as const),
+                  ]}
+                  onChange={(v) => change("observable_type", v)}
+                />
+                <FilterSelect
+                  label="Review status"
+                  value={filters.status ?? ""}
+                  options={[
+                    ["", "Any status"],
+                    ["pending", "Pending"],
+                    ["confirmed", "Confirmed"],
+                    ["rejected", "Rejected"],
+                    ["modified", "Modified"],
+                    ["needs-investigation", "Needs investigation"],
+                  ]}
+                  onChange={(v) => change("status", v)}
+                />
+                <FilterSelect
+                  label="Minimum confidence"
+                  value={String(filters.min_confidence ?? "")}
+                  options={[
+                    ["", "Any confidence"],
+                    ["0.5", "50% or higher"],
+                    ["0.7", "70% or higher"],
+                    ["0.9", "90% or higher"],
+                  ]}
+                  onChange={(v) => change("min_confidence", v)}
+                />
+                <Button
+                  size="sm"
+                  variant="outline"
+                  onClick={() =>
+                    void copyText(
+                      window.location.href,
+                      "Triage view link copied. Workspace permissions still apply.",
+                    )
+                  }
+                >
+                  <Copy size={14} />
+                  Copy view link
+                </Button>
+                <Button
+                  size="sm"
+                  variant="ghost"
+                  onClick={() =>
+                    apply(AssessmentFilters.parse({ view: filter }))
+                  }
+                >
+                  Clear filters
+                </Button>
               </div>
-            ) : (
-              <DataState empty />
-            )}
+            </details>
+            {!loading &&
+              !error &&
+              (filtered.length ? (
+                <div className="table-scroll">
+                  <table className="intel-table">
+                    <thead>
+                      {table.getHeaderGroups().map((group) => (
+                        <tr key={group.id}>
+                          {group.headers.map((header) => (
+                            <th key={header.id}>
+                              {flexRender(
+                                header.column.columnDef.header,
+                                header.getContext(),
+                              )}
+                            </th>
+                          ))}
+                        </tr>
+                      ))}
+                    </thead>
+                    <tbody>
+                      {table.getRowModel().rows.map((row) => (
+                        <tr key={row.id}>
+                          {row.getVisibleCells().map((cell) => (
+                            <td key={cell.id}>
+                              {flexRender(
+                                cell.column.columnDef.cell,
+                                cell.getContext(),
+                              )}
+                            </td>
+                          ))}
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              ) : (
+                <EmptyResults
+                  noun="assessments"
+                  onReset={() =>
+                    apply(AssessmentFilters.parse({ view: "all" }))
+                  }
+                />
+              ))}
             <div className="table-footer">
               <span>
                 {filtered.length} assessments on page {history.length + 1}
@@ -417,9 +590,9 @@ export function Operations() {
                 <Button
                   size="sm"
                   variant="outline"
-                  disabled={!history.length || loading}
+                  disabled={!cursor || loading}
                   onClick={() => {
-                    setCursor(history.at(-1)!);
+                    update({ cursor: history.at(-1) ?? "" });
                     setHistory(history.slice(0, -1));
                   }}
                 >
@@ -431,7 +604,7 @@ export function Operations() {
                   disabled={!data?.next_cursor || loading}
                   onClick={() => {
                     setHistory([...history, cursor]);
-                    setCursor(data!.next_cursor!);
+                    update({ cursor: data!.next_cursor! });
                   }}
                 >
                   Next page
@@ -454,7 +627,7 @@ export function Operations() {
             </Link>
           </div>
         </>
-      )}
+      }
       {showAssess && (
         <Modal
           titleId="assess-title"

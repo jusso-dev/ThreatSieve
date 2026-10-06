@@ -26,7 +26,9 @@ Relationships retain assertion type, source/target, confidence and provenance. S
 
 Private submissions and customer observations have visibility grants in `tenant_observables`. They do not enter public search or graph results. Public feed intelligence can promote the same deterministic observable into global visibility without disclosing tenant observations. Assessment, feedback, session, export and job queries require tenant scope.
 
-Evidence payloads are queryable JSON with an R2 raw-object reference. Arrays are bounded on the decision path. The current bundle limit is 100 public evidence records plus 30 customer records. Graph retrieval is bounded; truncated context forces review. Assessment lists use cursors, and entity search uses indexed exact aliases followed by a limited prefix lookup.
+Evidence payloads are queryable JSON with an R2 raw-object reference. Arrays are bounded on the decision path. The current bundle limit is 100 public evidence records plus 30 customer records. Graph retrieval is bounded; truncated context forces review. Assessment lists use sort-aware keyset cursors. Entity search uses indexed literal prefixes of canonical names, external IDs and aliases, with visibility enforced before pagination.
+
+Migration `0008_analyst_views.sql` adds personal saved views scoped by both tenant and user. Validated filter JSON is persisted under a unique owner/name key, with a maximum of 50 views per owner. The same additive migration indexes library browsing and assessment sorting by creation time, confidence and relevance. Entity cursors carry only an ID; its sort name is resolved through the scoped repository, keeping URLs bounded even for long observable values.
 
 Customer technology profiles, assets and observations are tenant-specific. Explicit sharing consent is recorded on observations for future privacy-safe aggregation. No private evidence is copied into the global evidence table by the observation API.
 
