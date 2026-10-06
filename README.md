@@ -40,7 +40,8 @@ Sync MITRE first, then MISP, then indicator feeds so canonical knowledge is avai
 - D1 graph storage, actor aliases, bounded graph candidates and optional Vectorize retrieval.
 - Clef-flash → confidence gate → Clef escalation. Full question distributions and candidate sets are retained.
 - Behaviour-gated ATT&CK mappings, conservative actor associations, structured confidence factors and customer relevance.
-- Scoped API keys, expiring web sessions, tenant-filtered private data, rate limits and audit events.
+- Better Auth accounts, verified email, team invitations, admin/analyst/viewer roles, password recovery, scoped API keys and tenant isolation.
+- Accessible toast notifications and actionable inline messages throughout analyst workflows.
 - Analyst operations, search, investigation, evidence inspection, clickable graph nodes, confirm/reject/modify/investigate, bulk upload, sources, clusters and environment profile.
 - Asynchronous processing, D1 outbox, job leases, retry/dead-letter handling and replay.
 - STIX 2.1 export and a Python OpenCTI connector using `OpenCTIConnectorHelper.send_stix2_bundle`.
@@ -67,7 +68,7 @@ For browser tests, run `pnpm exec e2e-web install chromium` once, then `pnpm tes
 
 ## Production deployment
 
-Hosted workspace: **[ThreatSieve on Cloudflare](https://threatsieve-web-production.yuma-it.workers.dev)**. Bring your workspace API key to sign in. OpenCTI runs separately on a private EC2 host; see [access and operations](docs/opencti-hosting.md).
+Hosted workspace: **[ThreatSieve on Cloudflare](https://threatsieve-web-production.yuma-it.workers.dev)**. Sign in with your email and password. Existing administrators use **Forgot password** once to set their password. Invite colleagues from **Team & access**; see [accounts and teams](docs/authentication.md). OpenCTI runs separately on a private EC2 host; see [access and operations](docs/opencti-hosting.md).
 
 See [deployment](docs/deployment.md) for resource provisioning, migration review, secrets, staging and protected production releases. The checked-in D1 identifier is local-only and the deployment script requires a real ID. Nothing deploys to a Cloudflare account merely by installing or building the project.
 
@@ -103,7 +104,13 @@ Captured from the running application with the labelled synthetic demo dataset. 
 
 ### Workspace sign-in
 
-![Workspace sign-in exchanging an API key for an expiring session](docs/images/sign-in.png)
+![Better Auth email and password sign-in with account recovery](docs/images/sign-in.png)
+
+### Team members and invitations
+
+![Team management with role controls, invitations and toast notifications](docs/images/team-access.png)
+
+<img src="docs/images/team-mobile.png" width="320" alt="Responsive team management on mobile">
 
 ### Mobile operations and navigation
 
@@ -113,4 +120,4 @@ Captured from the running application with the labelled synthetic demo dataset. 
 
 ## Documentation
 
-[Architecture](docs/architecture.md) · [Threat model](docs/threat-model.md) · [Classification](docs/classification.md) · [Confidence](docs/confidence-model.md) · [Sources](docs/intelligence-sources.md) · [Data model](docs/data-model.md) · [API](docs/api.md) · [OpenCTI](docs/opencti.md) · [Deployment](docs/deployment.md) · [Commercial architecture](docs/commercial-architecture.md)
+[Accounts and teams](docs/authentication.md) · [Architecture](docs/architecture.md) · [Threat model](docs/threat-model.md) · [Classification](docs/classification.md) · [Confidence](docs/confidence-model.md) · [Sources](docs/intelligence-sources.md) · [Data model](docs/data-model.md) · [API](docs/api.md) · [OpenCTI](docs/opencti.md) · [Deployment](docs/deployment.md) · [Commercial architecture](docs/commercial-architecture.md)

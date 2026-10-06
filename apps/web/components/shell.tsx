@@ -16,18 +16,27 @@ import {
   Menu,
   X,
   LogOut,
+  Users,
   Crosshair,
 } from "lucide-react";
-import { api, useApi } from "@/lib/api";
+import { AccessContext } from "@/lib/access";
+import { authClient, authResult } from "@/lib/auth";
+import { api, useApi, publicAuthPath } from "@/lib/api";
 import { Button } from "./ui/button";
 const navigation = [
   { name: "Threat operations", href: "/", icon: Radar },
   { name: "Threat clusters", href: "/clusters", icon: Network },
   { name: "Intelligence sources", href: "/sources", icon: Database },
   { name: "Bulk analysis", href: "/bulk", icon: Upload },
+  { name: "Team & access", href: "/team", icon: Users },
   { name: "Your environment", href: "/inventory", icon: Boxes },
 ];
 export function Shell({ children }: { children: React.ReactNode }) {
+  const path = usePathname();
+  if (publicAuthPath(path)) return children;
+  return <WorkspaceShell>{children}</WorkspaceShell>;
+}
+function WorkspaceShell({ children }: { children: React.ReactNode }) {
   const path = usePathname();
   const router = useRouter();
   const [query, setQuery] = useState("");
@@ -39,7 +48,13 @@ export function Shell({ children }: { children: React.ReactNode }) {
   const input = useRef<HTMLInputElement>(null);
   const sidebar = useRef<HTMLElement>(null);
   const [assessing, setAssessing] = useState(false);
-  const me = useApi<{ tenantId: string }>("v1/me");
+  const me = useApi<{
+    tenantId: string;
+    scopes: string[];
+    workspaceName?: string;
+    userName?: string;
+    role?: string;
+  }>("v1/me");
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {
       if ((e.metaKey || e.ctrlKey) && e.key === "k") {
@@ -67,7 +82,12 @@ export function Shell({ children }: { children: React.ReactNode }) {
           if (!controller.signal.aborted) setResults(r.data);
         })
         .catch((e) => {
-          if (!controller.signal.aborted) setSearchError(String(e));
+          if (!controller.signal.aborted)
+            setSearchError(
+              e instanceof Error
+                ? e.message
+                : "We couldn’t search intelligence. Please try again.",
+            );
         });
     }, 250);
     return () => {
@@ -120,9 +140,12 @@ export function Shell({ children }: { children: React.ReactNode }) {
       previous?.focus();
     };
   }, [open]);
-  if (path === "/sign-in") return children;
   const investigate = async (value: string) => {
-    if (assessing) return;
+    if (
+      assessing ||
+      !me.data?.scopes.some((s) => s === "admin" || s === "assessment:write")
+    )
+      return;
     setAssessing(true);
     setSearchError("");
     try {
@@ -167,10 +190,10 @@ export function Shell({ children }: { children: React.ReactNode }) {
           </span>
           ThreatSieve<span className="brand-period">.</span>
         </Link>
-        <button className="workspace" onClick={() => router.push("/inventory")}>
+        <button className="workspace" onClick={() => router.push("/team")}>
           <span className="workspace-avatar">TS</span>
           <span>
-            Threat workspace
+            {me.data?.workspaceName ?? "Your workspace"}
             <small>
               {me.data?.tenantId === "demo-tenant"
                 ? "Demonstration environment"
@@ -213,14 +236,18 @@ export function Shell({ children }: { children: React.ReactNode }) {
           <button
             className="profile"
             onClick={() => {
-              void api("v1/session", { method: "DELETE" }).then(() =>
-                router.push("/sign-in"),
-              );
+              void authResult(
+                authClient.signOut(),
+                "You’ve signed out securely.",
+              )
+                .then(() => router.push("/sign-in"))
+                .catch(() => {});
             }}
           >
             <span className="profile-avatar">TA</span>
             <span>
-              Threat analyst<small>Workspace session</small>
+              {me.data?.userName ?? "Your account"}
+              <small>{me.data?.role ?? "Workspace session"} · Sign out</small>
             </span>
             <LogOut size={15} />
           </button>
@@ -276,7 +303,12 @@ export function Shell({ children }: { children: React.ReactNode }) {
                   </button>
                 ))}
                 <button
-                  disabled={assessing}
+                  disabled={
+                    assessing ||
+                    !me.data?.scopes.some(
+                      (s) => s === "admin" || s === "assessment:write",
+                    )
+                  }
                   onClick={() => void investigate(query)}
                 >
                   <Search size={14} />
@@ -296,7 +328,11 @@ export function Shell({ children }: { children: React.ReactNode }) {
             {me.error ? "Connection issue" : "Workspace connected"}
           </span>
         </header>
-        <main id="main-content">{children}</main>
+        <main id="main-content">
+          <AccessContext value={me.data?.scopes ?? []}>
+            {children}
+          </AccessContext>
+        </main>
         <footer className="app-footer">
           <span>
             <ShieldCheck size={13} /> ThreatSieve decision layer

@@ -1,3 +1,4 @@
+import { migrationStatements } from "../packages/database/src/migrations";
 import { beforeAll, afterAll, it, expect, vi } from "vitest";
 import { Miniflare } from "miniflare";
 import { readFileSync, readdirSync } from "node:fs";
@@ -23,10 +24,9 @@ beforeAll(async () => {
   const db = await mf.getD1Database("DB");
   repo = new Repository(db);
   for (const name of readdirSync("migrations").sort())
-    for (const sql of readFileSync("migrations/" + name, "utf8")
-      .split(";")
-      .map((s) => s.trim())
-      .filter(Boolean))
+    for (const sql of migrationStatements(
+      readFileSync("migrations/" + name, "utf8"),
+    ))
       await db.prepare(sql).run();
 });
 afterAll(async () => {

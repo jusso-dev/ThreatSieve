@@ -66,7 +66,13 @@ export default function Clusters() {
                   }
                 >("v1/clusters/" + c.id)
                   .then(setSelected)
-                  .catch((e) => setDetailError(String(e)));
+                  .catch((e) =>
+                    setDetailError(
+                      e instanceof Error
+                        ? e.message
+                        : "We couldn’t load this cluster. Please try again.",
+                    ),
+                  );
               }}
             >
               Inspect cluster

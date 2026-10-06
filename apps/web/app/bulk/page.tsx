@@ -1,4 +1,6 @@
 "use client";
+import { usePermission } from "@/lib/access";
+import { toast } from "sonner";
 import { useState, useEffect, useRef } from "react";
 import { Upload, ArrowRight, FileText, CheckCircle2 } from "lucide-react";
 import { api } from "@/lib/api";
@@ -13,6 +15,7 @@ interface Job {
   stages: { stage: string; status: string; count: number }[];
 }
 export default function Bulk() {
+  const canWrite = usePermission("assessment:write");
   const [text, setText] = useState("");
   const [file, setFile] = useState<File>();
   const [busy, setBusy] = useState(false);
@@ -37,6 +40,16 @@ export default function Bulk() {
         if (controller.signal.aborted) return;
         setJob(result);
         setError("");
+        if (result.pipeline_status === "complete")
+          toast.success(
+            "Import complete. Your indicators are ready to investigate.",
+            { id: "import:" + jobId },
+          );
+        if (result.pipeline_status === "failed")
+          toast.error(
+            "Some indicators couldn’t be processed. Review the import details below.",
+            { id: "import:" + jobId },
+          );
         if (result.pipeline_status === "running")
           timer = setTimeout(() => void refresh(), 3000);
       } catch (e) {
@@ -67,12 +80,16 @@ export default function Bulk() {
               ? "json"
               : "text"
         : "text";
-      if (useFile && !file) throw new Error("Select a file");
+      const invalid = (message: string): never => {
+        toast.error(message);
+        throw new Error(message);
+      };
+      if (useFile && !file) invalid("Select a file to upload.");
       if (useFile && file && file.size > 16 * 1024 * 1024)
-        throw new Error("Files must be 16 MiB or smaller");
+        invalid("Files must be 16 MiB or smaller.");
       const body = useFile ? await file!.text() : text;
       if (new Blob([body]).size > 16 * 1024 * 1024)
-        throw new Error("Indicators must be 16 MiB or smaller");
+        invalid("Indicators must be 16 MiB or smaller.");
       if (
         !submission.current ||
         submission.current.body !== body ||
@@ -131,7 +148,7 @@ export default function Bulk() {
               {text.split("\n").filter((v) => v.trim()).length} lines
             </span>
             <Button
-              disabled={busy || !text.trim()}
+              disabled={!canWrite || busy || !text.trim()}
               onClick={() => void submit(false)}
             >
               {busy ? "Uploading…" : "Analyse indicators"}
@@ -160,7 +177,7 @@ export default function Bulk() {
           <div className="modal-actions">
             <Button
               variant="outline"
-              disabled={busy || !file}
+              disabled={!canWrite || busy || !file}
               onClick={() => void submit(true)}
             >
               Upload & analyse

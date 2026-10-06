@@ -27,13 +27,15 @@ Review the SQL migration set before applying it to remote D1. Take a D1 backup/T
 
 ```sh
 pnpm exec wrangler d1 migrations apply threatsieve-staging --remote --config wrangler.deploy.local.json
+pnpm exec wrangler secret put BETTER_AUTH_SECRET --name threatsieve-api-staging
+# Generate a cryptographically random value of at least 32 characters.
 pnpm exec wrangler secret put THREATFOX_AUTH_KEY --name threatsieve-api-staging
 pnpm exec wrangler secret put URLHAUS_AUTH_KEY --name threatsieve-api-staging
 ```
 
-Generate the deployment config first with the deployment script's config-only mode described in `pnpm deploy --help`, then apply migrations before deploying traffic. Never commit generated credentials, `.dev.vars`, `.env.local`, real tenant bootstrap artifacts or raw customer intelligence.
+Generate the deployment config first with the deployment script's config-only mode described in `pnpm exec tsx scripts/deploy.ts --help`, then apply migrations before deploying traffic. Never commit generated credentials, `.dev.vars`, `.env.local`, real tenant bootstrap artifacts or raw customer intelligence.
 
-Existing installations must apply `0005_review_and_exports.sql` before running this release. It preserves legacy export records and adds assessment revisions, versioned export storage and query indexes. Local `pnpm db:migrate` applies it to the development database.
+Existing installations must apply all migrations through `0007_last_admin.sql` before running this release. Migration 0006 preserves existing users, tenant IDs and memberships while adding Better Auth tables; migration 0007 protects the final admin with D1 triggers. Migration 0005 preserves legacy exports and adds assessment revisions. Local `pnpm db:migrate` applies it to the development database.
 
 ## Release
 
@@ -44,12 +46,14 @@ pnpm test
 pnpm eval
 pnpm security
 pnpm build
-pnpm deploy
+pnpm exec tsx scripts/deploy.ts
 ```
 
-`pnpm deploy --production` requires `THREATSIEVE_PRODUCTION_RELEASE=approved`. In CI this belongs to a protected production environment with required reviewers. Configure the relevant staging/production resource variables and Cloudflare secrets in GitHub environments. Main-branch deployment runs only after checks and when deployment has explicitly been enabled for that repository.
+`pnpm exec tsx scripts/deploy.ts --production` requires `THREATSIEVE_PRODUCTION_RELEASE=approved`. In CI this belongs to a protected production environment with required reviewers. Configure the relevant staging/production resource variables and Cloudflare secrets in GitHub environments. Main-branch deployment runs only after checks and when deployment has explicitly been enabled for that repository.
 
-Next.js 16 deploys via the OpenNext Cloudflare adapter. Web sessions are proxied to the API through a same-origin route handler. Production never uses `DEVELOPMENT_API_KEY`; provision tenant membership and a scoped bootstrap key, then sign in. Prefer a production identity provider/SSO integration before broad multi-user commercial rollout.
+Next.js 16 deploys via the OpenNext Cloudflare adapter. Better Auth sessions are proxied through the same-origin web handler. Production never uses `DEVELOPMENT_API_KEY`; provision the first administrator, then use Forgot password to establish that account’s password. Invite additional members in Team & access. See [authentication](authentication.md).
+
+Verify a sending domain with Cloudflare Email Service before enabling invitations. Set `THREATSIEVE_AUTH_EMAIL_FROM` when generating deployment configuration to choose the sender; it updates both `AUTH_EMAIL_FROM` and the `EMAIL` binding’s allowed sender. The current production sender is `threatsieve@yumait.com.au`. No separate email API key is needed. Never enable live email delivery in automated tests.
 
 ## Acceptance checks
 
@@ -70,8 +74,10 @@ THREATSIEVE_WRANGLER_CONFIG=wrangler.deploy.local.json \
   pnpm exec tsx scripts/tenant.ts 'Your organisation' admin@example.com --remote
 ```
 
-The one-time key is written to `artifacts/tenant-credentials.local.json` with owner-only permissions. Use it at `/sign-in`, then store it in your secret manager. The bootstrap script resolves the `DB` binding, so it works with stage-specific database names. Never run the synthetic demo seed against production.
+The one-time key is written to `artifacts/tenant-credentials.local.json` with owner-only permissions. Store it in your secret manager for integration API access. Browser sign-in uses the administrator email and a password established through Forgot password. The bootstrap script resolves the `DB` binding, so it works with stage-specific database names. Never run the synthetic demo seed against production.
 
 The production acceptance check on 2026-10-06 exercised real Clef-flash and Clef escalation, persisted full distributions, exported STIX, created a secure browser session, and opened operations, sources, bulk analysis, clusters and inventory without browser exceptions. `example.com` returned unknown with no ATT&CK or actor assertion. Feed backfills run asynchronously; a successful sync request means queued, not that normalization has finished. ThreatFox and URLhaus require their own secrets before they can sync. Vectorize remains disabled until knowledge embeddings are populated.
 
 The EC2-hosted OpenCTI integration is documented in [OpenCTI hosting](opencti-hosting.md). ThreatSieve itself has no EKS dependency.
+
+The Better Auth release applies migrations 0006–0007 and preserves existing organization membership and API keys. Production checks verified API-key compatibility (200), anonymous session lookup (200 with null), anonymous tenant access (401), disabled key-to-browser-session exchange (401), rejected foreign-Origin login (403), and rendered sign-in/recovery screens without browser exceptions. Invitation delivery and password resets are exercised with a captured email binding in the offline suite; live mailbox delivery is not asserted by those tests.

@@ -1,4 +1,5 @@
 "use client";
+import { usePermission } from "@/lib/access";
 import Link from "next/link";
 import { useState, useEffect } from "react";
 import { useRouter } from "next/navigation";
@@ -38,6 +39,7 @@ export function Severity({ value }: { value: string }) {
   );
 }
 export function Operations() {
+  const canWrite = usePermission("assessment:write");
   const [filter, setFilterValue] = useState("attention");
   const [search, setSearch] = useState("");
   const [query, setQuery] = useState("");
@@ -226,7 +228,15 @@ export function Operations() {
             >
               <RefreshCw size={15} />
             </Button>
-            <Button onClick={() => setShowAssess(true)}>
+            <Button
+              disabled={!canWrite}
+              title={
+                !canWrite
+                  ? "An analyst or admin role is required to assess indicators."
+                  : undefined
+              }
+              onClick={() => setShowAssess(true)}
+            >
               <Plus size={16} /> Assess observable
             </Button>
           </div>

@@ -35,6 +35,7 @@ async function handler(
     "cookie",
     "authorization",
     "idempotency-key",
+    "cf-connecting-ip",
   ]) {
     const value = request.headers.get(key);
     if (value) headers.set(key, value);
@@ -69,13 +70,15 @@ async function handler(
     const resultHeaders = new Headers();
     for (const key of [
       "content-type",
-      "set-cookie",
+      "location",
       "x-request-id",
       "content-disposition",
     ]) {
       const value = response.headers.get(key);
       if (value) resultHeaders.set(key, value);
     }
+    for (const cookie of response.headers.getSetCookie())
+      resultHeaders.append("Set-Cookie", cookie);
     resultHeaders.set("Cache-Control", "no-store");
     return new Response(response.body, {
       status: response.status,
@@ -87,7 +90,7 @@ async function handler(
         error: {
           code: "API_UNAVAILABLE",
           message:
-            "ThreatSieve API is unavailable. Start the API Worker and try again.",
+            "We can’t reach ThreatSieve right now. Please try again shortly.",
         },
       },
       { status: 503 },

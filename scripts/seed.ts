@@ -1,4 +1,4 @@
-import { writeFileSync, mkdirSync } from "node:fs";
+import { writeFileSync, mkdirSync, existsSync, readFileSync } from "node:fs";
 import { execFileSync } from "node:child_process";
 import { buildDemoSeed } from "./demo-data";
 import { exportStix } from "../packages/stix/src/index";
@@ -38,6 +38,19 @@ async function main() {
     "API_ORIGIN=http://127.0.0.1:8787\nDEVELOPMENT_API_KEY=" + token + "\n",
     { mode: 0o600 },
   );
+  const existing = existsSync(".dev.vars")
+    ? readFileSync(".dev.vars", "utf8")
+    : "";
+  if (!/^BETTER_AUTH_SECRET=.+/m.test(existing))
+    writeFileSync(
+      ".dev.vars",
+      existing +
+        "\nBETTER_AUTH_SECRET=" +
+        crypto.randomUUID() +
+        crypto.randomUUID() +
+        "\n",
+      { mode: 0o600 },
+    );
   console.log(
     "Seeded six labelled synthetic scenarios. Local credential saved to credentials.local.json; pnpm dev opens the demonstration workspace.",
   );

@@ -1,6 +1,6 @@
 # Full-stack end-to-end testing
 
-The primary suite contains **55 end-to-end tests** and uses [tester-army/e2e](https://github.com/tester-army/e2e), pinned to `e2e@0.17.0` and `@e2e-dev/web@0.12.0`. Tests use its browser fixtures, semantic locators, exact assertions, route fault injection, downloads and polling. No agent or language-model call decides whether a test passes.
+The primary suite contains **60 end-to-end tests** and uses [tester-army/e2e](https://github.com/tester-army/e2e), pinned to `e2e@0.17.0` and `@e2e-dev/web@0.12.0`. Tests use its browser fixtures, semantic locators, exact assertions, route fault injection, downloads and polling. No agent or language-model call decides whether a test passes.
 
 ## Run
 
@@ -74,3 +74,9 @@ Retries are disabled so regressions stay visible. Each tenant and browser contex
 ## Boundaries
 
 These tests establish application behavior against the local Workers runtime. Recorded classifier probabilities are not measurements of Clef accuracy. They do not validate live provider availability/licensing, deployed Cloudflare configuration, Vectorize retrieval quality, actual OpenCTI delivery, TLS/Secure cookies, multiple browser engines, load capacity or statistical calibration. Those remain deployment acceptance or separate evaluation concerns. Mobile coverage is responsive Chromium, not a native mobile app or Safari certification.
+
+## Account and team coverage
+
+The suite uses real Better Auth sessions against ephemeral D1, with an email binding that captures messages in test-only R2. It exercises invitation → signup → email verification → acceptance, member roles, last-admin protection, resend/cancellation, password reset and revocation, toast feedback and mobile layout. Integration tests additionally prove wrong-recipient rejection, cross-tenant membership isolation, immediate authorization changes, atomic last-admin protection, single-use reset links and recoverable delivery failures. No test sends email or uses a deployed account.
+
+To refresh account/team README images, run `UPDATE_SCREENSHOTS=1 pnpm test:e2e tests/system/team-access.e2e.ts`. These images use synthetic accounts only.

@@ -135,7 +135,9 @@ test("temporary intelligence outage displays a recoverable error", async ({
   });
   await browser.goto("/");
   await expect(
-    screen.getByRole("alert").filter({ hasText: "Synthetic temporary outage" }),
+    screen
+      .getByRole("alert")
+      .filter({ hasText: "ThreatSieve is temporarily unavailable" }),
   ).toBeVisible();
   fail = false;
   await screen.getByRole("button", "Refresh intelligence").click();

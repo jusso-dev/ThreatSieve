@@ -1,4 +1,6 @@
 "use client";
+import { usePermission } from "@/lib/access";
+import { toast } from "sonner";
 import Link from "next/link";
 import { useState } from "react";
 import {
@@ -28,6 +30,7 @@ import type {
   IntelRelationship,
 } from "../../../packages/schemas/src/index";
 export function Investigation({ id }: { id: string }) {
+  const canWrite = usePermission("assessment:write");
   const {
     data: a,
     error,
@@ -110,20 +113,53 @@ export function Investigation({ id }: { id: string }) {
         </div>
         <div className="actions">
           <Button variant="outline" asChild>
-            <a href={"/api/v1/assessments/" + id + "/stix"} download>
+            <a
+              href={"/api/v1/assessments/" + id + "/stix"}
+              download
+              onClick={async (event) => {
+                event.preventDefault();
+                try {
+                  const bundle = await api<unknown>(
+                    "v1/assessments/" + id + "/stix",
+                  );
+                  const url = URL.createObjectURL(
+                    new Blob([JSON.stringify(bundle, null, 2)], {
+                      type: "application/json",
+                    }),
+                  );
+                  const link = document.createElement("a");
+                  link.href = url;
+                  link.download = id + ".stix.json";
+                  link.click();
+                  setTimeout(() => URL.revokeObjectURL(url), 1000);
+                  toast.success(
+                    "STIX export downloaded. Source provenance is included.",
+                  );
+                } catch {
+                  /* The API helper displays an actionable error toast. */
+                }
+              }}
+            >
               <Download size={14} />
               Export STIX
             </a>
           </Button>
           <Button
             variant="outline"
+            disabled={!canWrite}
             onClick={() => {
               void api<{ job_id: string }>(
                 "v1/assessments/" + id + "/reclassify",
                 { method: "POST" },
               )
                 .then((r) => setMessage("Reclassification queued: " + r.job_id))
-                .catch((e) => setMessage(String(e)));
+                .catch((e) =>
+                  setMessage(
+                    e instanceof Error
+                      ? e.message
+                      : "We couldn’t queue reclassification. Please try again.",
+                  ),
+                );
             }}
           >
             <RefreshCw size={14} />
@@ -430,13 +466,18 @@ export function Investigation({ id }: { id: string }) {
               Review the supporting evidence and record your judgment.
             </p>
             <div className="actions">
-              <Button size="sm" onClick={() => beginFeedback("confirm")}>
+              <Button
+                size="sm"
+                disabled={!canWrite}
+                onClick={() => beginFeedback("confirm")}
+              >
                 <Check size={14} />
                 Confirm
               </Button>
               <Button
                 variant="outline"
                 size="sm"
+                disabled={!canWrite}
                 onClick={() => beginFeedback("reject")}
               >
                 <X size={14} />
@@ -447,6 +488,7 @@ export function Investigation({ id }: { id: string }) {
               size="sm"
               variant="outline"
               style={{ marginTop: 8 }}
+              disabled={!canWrite}
               onClick={() => beginFeedback("modify")}
             >
               Modify classification
@@ -454,6 +496,7 @@ export function Investigation({ id }: { id: string }) {
             <Button
               size="sm"
               variant="ghost"
+              disabled={!canWrite}
               onClick={() => beginFeedback("investigate")}
               style={{ marginTop: 8 }}
             >

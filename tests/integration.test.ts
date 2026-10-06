@@ -1,3 +1,4 @@
+import { migrationStatements } from "../packages/database/src/migrations";
 import { beforeAll, afterAll, describe, it, expect, vi } from "vitest";
 import { z } from "zod";
 import { Miniflare } from "miniflare";
@@ -45,18 +46,15 @@ beforeAll(async () => {
   repo = new Repository(db);
   for (const name of readdirSync("migrations").sort()) {
     const sql = readFileSync("migrations/" + name, "utf8");
-    for (const statement of sql
-      .split(";")
-      .map((s) => s.trim())
-      .filter(Boolean))
+    for (const statement of migrationStatements(sql))
       await db.prepare(statement).run();
   }
   await db.batch([
     db
-      .prepare("INSERT INTO tenants VALUES(?,?,?)")
+      .prepare("INSERT INTO tenants(id,name,created_at) VALUES(?,?,?)")
       .bind("tenant-a", "A", new Date().toISOString()),
     db
-      .prepare("INSERT INTO tenants VALUES(?,?,?)")
+      .prepare("INSERT INTO tenants(id,name,created_at) VALUES(?,?,?)")
       .bind("tenant-b", "B", new Date().toISOString()),
   ]);
   await db
@@ -710,8 +708,12 @@ it("exports immutable corrections, synchronizes review metadata and rejects conc
   ).rejects.toThrow("not found");
 });
 
-it("requires an API key and a trusted browser Origin when creating sessions", async () => {
-  const env = { DB: db, WEB_ORIGIN: "https://web.test" };
+it("requires an API key and a trusted browser Origin for development-only legacy sessions", async () => {
+  const env = {
+    DB: db,
+    WEB_ORIGIN: "https://web.test",
+    APP_ENV: "development",
+  };
   const rejected = await app.request(
     "/v1/session",
     {

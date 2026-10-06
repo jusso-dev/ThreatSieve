@@ -1,4 +1,4 @@
 import { AuthForm } from "@/components/auth-form";
 export default function Page() {
-  return <AuthForm mode="sign-in" />;
+  return <AuthForm mode="reset-password" />;
 }

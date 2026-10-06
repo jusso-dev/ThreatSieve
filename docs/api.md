@@ -1,6 +1,6 @@
 # API v1
 
-Authenticate with `Authorization: Bearer $THREATSIEVE_API_KEY`, or exchange a scoped key at `POST /v1/session` for an eight-hour HttpOnly session. Sessions preserve the originating key's scopes and expire/revoke with that key. Session mutations require the configured web Origin.
+Authenticate integrations with `Authorization: Bearer $THREATSIEVE_API_KEY`. Browser users sign in with Better Auth email/password at `/api/auth/sign-in/email` through the same-origin web proxy. Eight-hour HttpOnly sessions derive permissions from current tenant membership on every request. Session mutations require the configured web Origin. See [accounts and teams](authentication.md).
 
 ```sh
 curl -X POST http://127.0.0.1:8787/v1/assess \
@@ -30,7 +30,7 @@ curl -X POST http://127.0.0.1:8787/v1/assess \
 | `PUT /v1/environment`                                                                             | admin                |
 | `POST /v1/observations`                                                                           | assessment:write     |
 | `POST /v1/api-keys`, `DELETE /v1/api-keys/:id`, `GET /v1/ops`                                     | admin                |
-| `GET /v1/me`, `DELETE /v1/session`                                                                | authenticated        |
+| `GET /v1/me`                                                                                      | authenticated        |
 | `GET /health`, `GET /ready`                                                                       | public, minimal data |
 
 Bulk JSON takes `{ "observables": ["example.com", {"observable":"192.0.2.5","type":"ipv4"}] }`. Uploads take a raw UTF-8 body and explicit format. CSV needs `observable` (or `indicator`) and optional `type` headers. A 202 response includes the tenant-scoped job ID. Poll `/v1/jobs/:id`; stages report ingestion and classification separately. `pipeline_status` is `running`, `complete`, or `failed` across all child pages and stages; stop polling on a terminal value. `totals` counts processed and rejected inputs. Limits are 16 MiB and 100,000 items per upload.
@@ -53,4 +53,4 @@ Entity lists default to 50 and cap at 100 records. Graph depth caps at three, no
 
 `GET /v1/assessments` accepts `view=all|attention|review`, `q`, `limit` and `cursor`. Filtering is performed before pagination. Responses include tenant-wide `summary` counts and the top three attention items in `priority`; those counts do not depend on the current page. Invalid cursors return 400 `INVALID_CURSOR`.
 
-Session creation requires a bearer API key; cookies alone cannot renew a session. A supplied browser Origin must equal the configured web origin.
+Better Auth browser routes include sign-in, sign-up, sign-out, email verification, password reset and the organization plugin’s invitation/member endpoints. API Worker routes use `/auth/*`; the web proxy exposes `/api/auth/*`. Organization creation/deletion are disabled. The legacy `/v1/session` key exchange is development-only; production sign-out uses `POST /api/auth/sign-out`.

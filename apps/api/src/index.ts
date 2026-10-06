@@ -1,3 +1,7 @@
+import {
+  createAuth,
+  authenticateSession,
+} from "../../../packages/auth/src/better-auth";
 import { Hono } from "hono";
 import { cors } from "hono/cors";
 import { secureHeaders } from "hono/secure-headers";
@@ -124,7 +128,115 @@ app.get("/ready", async (c) => {
     return c.json({ status: "not-ready" }, 503);
   }
 });
+app.on(["GET", "POST"], "/auth/*", async (c) => {
+  let emailFailed = false;
+  const auth = createAuth(c.env, () => {
+    emailFailed = true;
+  });
+  const url = new URL(c.req.url);
+  url.pathname = "/api" + url.pathname;
+  let body: Record<string, unknown> = {};
+  let request = c.req.raw;
+  if (c.req.method === "POST") {
+    if (c.req.header("Origin") !== c.env.WEB_ORIGIN)
+      throw new AppError(
+        "INVALID_ORIGIN",
+        403,
+        "Open ThreatSieve in your browser and try again.",
+      );
+    const text = await boundedText(new Response(c.req.raw.body), 16384);
+    try {
+      body = JSON.parse(text) as Record<string, unknown>;
+    } catch {
+      throw new AppError("INVALID_JSON", 400, "Check the form and try again.");
+    }
+    request = new Request(c.req.url, {
+      method: "POST",
+      headers: c.req.raw.headers,
+      body: text,
+    });
+  }
+  const previous = await auth.api.getSession({ headers: request.headers });
+  const response = await auth.handler(new Request(url, request));
+  if (response.ok && c.req.method === "POST") {
+    const action = c.req.path.slice(6);
+    const audited = [
+      "sign-in/email",
+      "sign-out",
+      "organization/invite-member",
+      "organization/cancel-invitation",
+      "organization/accept-invitation",
+      "organization/reject-invitation",
+      "organization/update-member-role",
+      "organization/remove-member",
+      "organization/set-active",
+    ];
+    if (audited.includes(action)) {
+      const result = (await response.clone().json()) as {
+        user?: { id: string };
+      };
+      const userId = previous?.user.id ?? result.user?.id;
+      let tenantId =
+        typeof body.organizationId === "string"
+          ? body.organizationId
+          : previous?.session.activeOrganizationId;
+      if (typeof body.invitationId === "string") {
+        const invitation = await c.env.DB.prepare(
+          "SELECT organization_id FROM auth_invitations WHERE id=?",
+        )
+          .bind(body.invitationId)
+          .first<{ organization_id: string }>();
+        tenantId = invitation?.organization_id;
+      }
+      if (userId) {
+        if (!tenantId)
+          tenantId = (
+            await c.env.DB.prepare(
+              "SELECT tenant_id FROM tenant_members WHERE user_id=? ORDER BY tenant_id LIMIT 1",
+            )
+              .bind(userId)
+              .first<{ tenant_id: string }>()
+          )?.tenant_id;
+        if (tenantId)
+          await new Repository(c.env.DB).audit(
+            {
+              tenantId,
+              userId,
+              keyId: previous?.session.id ?? "login",
+              kind: "session",
+              scopes: [],
+            },
+            action,
+            typeof body.memberId === "string"
+              ? body.memberId
+              : typeof body.invitationId === "string"
+                ? body.invitationId
+                : tenantId,
+            c.get("requestId"),
+            { role: body.role ?? null },
+            c.req.header("cf-connecting-ip"),
+          );
+      }
+    }
+  }
+  if (emailFailed)
+    return c.json(
+      {
+        code: "EMAIL_UNAVAILABLE",
+        message:
+          "We couldn’t send the email. Please try again shortly. For an existing invitation, use Resend.",
+      },
+      503,
+    );
+  return response;
+});
 app.post("/v1/session", async (c) => {
+  if (c.env.APP_ENV !== "development")
+    throw new AppError(
+      "UNAUTHORIZED",
+      401,
+      "Sign in with your email and password.",
+    );
   if (c.req.header("Origin") && c.req.header("Origin") !== c.env.WEB_ORIGIN)
     throw new AppError("INVALID_ORIGIN", 403, "Request origin is not allowed");
   if (!c.req.header("Authorization")?.startsWith("Bearer "))
@@ -149,7 +261,12 @@ app.post("/v1/session", async (c) => {
   return c.json({ tenantId: p.tenantId, expiresAt: expiry });
 });
 app.use("/v1/*", async (c, next) => {
-  const p = await authenticate(c.env.DB, c.req.raw);
+  const p =
+    c.req.header("Authorization")?.startsWith("Bearer ") ||
+    (c.env.APP_ENV === "development" &&
+      c.req.header("Cookie")?.includes("ts_session="))
+      ? await authenticate(c.env.DB, c.req.raw)
+      : await authenticateSession(c.env, c.req.raw);
   c.set("principal", p);
   await rateLimit(c.env.DB, p);
   if (
@@ -184,13 +301,31 @@ async function json(
     throw new AppError("INVALID_JSON", 400, "Invalid JSON body");
   }
 }
-app.get("/v1/me", (c) =>
-  c.json({
-    tenantId: c.get("principal").tenantId,
-    userId: c.get("principal").userId,
-    scopes: c.get("principal").scopes,
-  }),
-);
+app.get("/v1/me", async (c) => {
+  const p = c.get("principal");
+  const workspace = await c.env.DB.prepare(
+    "SELECT name FROM tenants WHERE id=?",
+  )
+    .bind(p.tenantId)
+    .first<{ name: string }>();
+  const user = await c.env.DB.prepare("SELECT name,email FROM users WHERE id=?")
+    .bind(p.userId)
+    .first<{ name: string; email: string }>();
+  const member = await c.env.DB.prepare(
+    "SELECT role FROM tenant_members WHERE tenant_id=? AND user_id=?",
+  )
+    .bind(p.tenantId, p.userId)
+    .first<{ role: string }>();
+  return c.json({
+    tenantId: p.tenantId,
+    userId: p.userId,
+    scopes: p.scopes,
+    workspaceName: workspace?.name,
+    userName: user?.name,
+    email: user?.email,
+    role: member?.role,
+  });
+});
 app.delete("/v1/session", async (c) => {
   const cookie = c.req
     .header("cookie")

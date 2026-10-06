@@ -1,3 +1,4 @@
+import { hashPassword } from "better-auth/crypto";
 /** Test-only Worker entry. Production wrangler.jsonc never imports this module. */
 import production from "../../../apps/api/src/index";
 import type { AppEnv } from "../../../apps/api/src/env";
@@ -33,7 +34,14 @@ function environment(env: TestEnv): AppEnv {
       return { ...reply, model_version: "synthetic-e2e-v1" };
     },
   } as unknown as Ai;
-  return { ...env, AI: ai };
+  const email = {
+    async send(message: EmailMessageBuilder) {
+      const recipient = typeof message.to === "string" ? message.to : "unknown";
+      await env.ARCHIVE.put("test-mail/" + recipient, JSON.stringify(message));
+      return { messageId: crypto.randomUUID() };
+    },
+  } as SendEmail;
+  return { ...env, AI: ai, EMAIL: email };
 }
 export default {
   async fetch(request: Request, env: TestEnv, ctx: ExecutionContext) {
@@ -42,6 +50,13 @@ export default {
       return production.fetch(request, environment(env), ctx);
     if (request.headers.get("X-Test-Control") !== env.TEST_CONTROL_TOKEN)
       return new Response(null, { status: 404 });
+    if (url.pathname === "/__test/mail" && request.method === "POST") {
+      const { email } = z
+        .object({ email: z.string().email() })
+        .parse(await request.json());
+      const mail = await env.ARCHIVE.get("test-mail/" + email);
+      return Response.json(mail ? await mail.json() : null);
+    }
     const repo = new Repository(env.DB);
     if (url.pathname === "/__test/workspace" && request.method === "POST") {
       const input = z
@@ -55,18 +70,33 @@ export default {
         keyId = crypto.randomUUID(),
         key = crypto.randomUUID() + crypto.randomUUID();
       const now = new Date().toISOString();
+      const userId = crypto.randomUUID(),
+        email = userId + "@example.com",
+        password = "Synthetic passphrase 42!";
+      const role = input.scopes.includes("admin")
+        ? "admin"
+        : input.scopes.includes("assessment:write")
+          ? "analyst"
+          : "viewer";
       await env.DB.batch([
-        env.DB.prepare("INSERT INTO tenants VALUES(?,?,?)").bind(
-          tenantId,
-          "Isolated E2E workspace",
-          now,
-        ),
+        env.DB.prepare(
+          "INSERT INTO tenants(id,name,created_at) VALUES(?,?,?)",
+        ).bind(tenantId, "Isolated E2E workspace", now),
+        env.DB.prepare(
+          "INSERT INTO users(id,email,name,email_verified,created_at,updated_at) VALUES(?,?,?,1,?,?)",
+        ).bind(userId, email, "Demo analyst", now, now),
+        env.DB.prepare(
+          "INSERT INTO auth_accounts(id,account_id,provider_id,user_id,password,created_at,updated_at) VALUES(?,?,'credential',?,?,?,?)",
+        ).bind(userId, userId, userId, await hashPassword(password), now, now),
+        env.DB.prepare(
+          "INSERT INTO tenant_members(id,tenant_id,user_id,role,created_at) VALUES(?,?,?,?,?)",
+        ).bind(userId, tenantId, userId, role, now),
         env.DB.prepare(
           "INSERT INTO api_keys(id,tenant_id,user_id,name,hash,scopes,created_at) VALUES(?,?,?,?,?,?,?)",
         ).bind(
           keyId,
           tenantId,
-          "synthetic-analyst",
+          userId,
           "Test-only key",
           await digest(key),
           JSON.stringify(input.scopes),
@@ -95,7 +125,15 @@ export default {
           [],
         );
       }
-      return Response.json({ tenantId, keyId, key, assessments });
+      return Response.json({
+        tenantId,
+        keyId,
+        key,
+        assessments,
+        email,
+        password,
+        userId,
+      });
     }
     if (url.pathname === "/__test/inspect" && request.method === "POST") {
       const { tenantId } = z

@@ -18,10 +18,10 @@ async function main() {
   const now = new Date().toISOString();
   const q = (value: string) => "'" + value.replaceAll("'", "''") + "'";
   const sql = [
-    `INSERT INTO tenants VALUES(${[id, name, now].map(q).join(",")});`,
-    `INSERT OR IGNORE INTO users VALUES(${[userId, email, now].map(q).join(",")});`,
-    `INSERT INTO tenant_members SELECT ${q(id)},id,'admin' FROM users WHERE email=${q(email)};`,
-    `INSERT INTO api_keys(id,tenant_id,user_id,name,hash,scopes,created_at) SELECT ${q(crypto.randomUUID())},${q(id)},id,'Bootstrap administrator',${q(await digest(key))},'["admin"]',${q(now)} FROM users WHERE email=${q(email)};`,
+    `INSERT INTO tenants(id,name,created_at,slug) VALUES(${[id, name, now, "workspace-" + id].map(q).join(",")});`,
+    `INSERT OR IGNORE INTO users(id,email,created_at,name,updated_at) VALUES(${[userId, email.toLowerCase(), now, email, now].map(q).join(",")});`,
+    `INSERT INTO tenant_members(tenant_id,user_id,role,id,created_at) SELECT ${q(id)},id,'admin',${q(crypto.randomUUID())},${q(now)} FROM users WHERE email=${q(email.toLowerCase())};`,
+    `INSERT INTO api_keys(id,tenant_id,user_id,name,hash,scopes,created_at) SELECT ${q(crypto.randomUUID())},${q(id)},id,'Bootstrap administrator',${q(await digest(key))},'["admin"]',${q(now)} FROM users WHERE email=${q(email.toLowerCase())};`,
   ].join("\n");
   mkdirSync("artifacts", { recursive: true });
   const file = "artifacts/tenant.local.sql";

@@ -9,6 +9,7 @@
   },
   "vars": {
     "APP_ENV": "development",
+    "AUTH_EMAIL_FROM": "threatsieve@yumait.com.au",
     "WEB_ORIGIN": "http://127.0.0.1:3000",
     "AUTO_ACCEPT_THRESHOLD": "0.90",
     "REVIEW_THRESHOLD": "0.25",
@@ -33,6 +34,7 @@
       "bucket_name": "threatsieve-archive",
     },
   ],
+  "send_email": [{ "name": "EMAIL", "allowed_sender_addresses": ["threatsieve@yumait.com.au"] }],
   "ai": {
     "binding": "AI",
     "remote": true,

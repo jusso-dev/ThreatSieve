@@ -1,3 +1,4 @@
+import { hashPassword } from "better-auth/crypto";
 import { normalise, digest } from "../packages/intel/src/normalise";
 import {
   EnvironmentSchema,
@@ -29,18 +30,39 @@ export async function buildDemoSeed() {
     );
   insert(
     "tenants",
-    ["id", "name", "created_at"],
-    [tenant, "ThreatSieve demonstration", now],
+    ["id", "name", "created_at", "slug"],
+    [tenant, "ThreatSieve demonstration", now, "demo"],
   );
   insert(
     "users",
-    ["id", "email", "created_at"],
-    [analyst, "analyst@example.test", now],
+    ["id", "email", "created_at", "name", "email_verified", "updated_at"],
+    [analyst, "analyst@example.test", now, "Demo analyst", 1, now],
   );
   insert(
     "tenant_members",
-    ["tenant_id", "user_id", "role"],
-    [tenant, analyst, "admin"],
+    ["tenant_id", "user_id", "role", "id", "created_at"],
+    [tenant, analyst, "admin", "demo-membership", now],
+  );
+  insert(
+    "auth_accounts",
+    [
+      "id",
+      "account_id",
+      "provider_id",
+      "user_id",
+      "password",
+      "created_at",
+      "updated_at",
+    ],
+    [
+      "demo-credential",
+      analyst,
+      "credential",
+      analyst,
+      await hashPassword("ThreatSieve local demo only!"),
+      now,
+      now,
+    ],
   );
   insert(
     "api_keys",

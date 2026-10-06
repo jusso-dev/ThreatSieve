@@ -4,3 +4,7 @@ URLHAUS_AUTH_KEY=
 OTX_API_KEY=
 VIRUSTOTAL_API_KEY=
 GREYNOISE_API_KEY=
+
+# Required for Better Auth; pnpm bootstrap generates a random local value.
+# Production: provision using wrangler secret put BETTER_AUTH_SECRET.
+BETTER_AUTH_SECRET=

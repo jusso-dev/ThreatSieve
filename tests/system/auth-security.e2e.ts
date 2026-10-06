@@ -14,14 +14,17 @@ test("unauthenticated browser is redirected and invalid credentials remain signe
 }) => {
   await browser.goto("/");
   await expect(
-    screen.getByRole("heading", "Enter your workspace."),
+    screen.getByRole("heading", "Welcome to your workspace."),
   ).toBeVisible();
-  await screen.getByLabel("Workspace API key").fill("invalid-synthetic-key");
-  await screen.getByRole("button", "Continue securely").click();
+  await screen.getByLabel("Work email").fill("invalid@example.com");
+  await screen.getByLabel("Password").fill("invalid-synthetic-password");
+  await screen.getByRole("button", "Sign in").click();
   await expect(screen.getByRole("alert")).toBeVisible();
-  expect((await browser.cookies()).some((c) => c.name === "ts_session")).toBe(
-    false,
-  );
+  expect(
+    (await browser.cookies()).some(
+      (c) => c.name === "better-auth.session_token",
+    ),
+  ).toBe(false);
 });
 test("real sign-in persists an HttpOnly session without browser-stored API keys", async ({
   browser,
@@ -29,12 +32,13 @@ test("real sign-in persists an HttpOnly session without browser-stored API keys"
   workspace,
 }) => {
   await browser.goto("/sign-in");
-  await screen.getByLabel("Workspace API key").fill(workspace.key);
-  await screen.getByRole("button", "Continue securely").click();
-  await expect(
-    screen.getByRole("heading", "Focus on what matters."),
-  ).toBeVisible();
-  const cookie = (await browser.cookies()).find((c) => c.name === "ts_session");
+  await screen.getByLabel("Work email").fill(workspace.email);
+  await screen.getByLabel("Password").fill(workspace.password);
+  await screen.getByRole("button", "Sign in").click();
+  await expect(screen.getByRole("heading", "Your team")).toBeVisible();
+  const cookie = (await browser.cookies()).find(
+    (c) => c.name === "better-auth.session_token",
+  );
   expect(cookie?.httpOnly).toBe(true);
   expect(cookie?.sameSite).toBe("Strict");
   expect(
@@ -45,9 +49,7 @@ test("real sign-in persists an HttpOnly session without browser-stored API keys"
     })),
   ).toEqual({ local: {}, session: {}, cookies: "" });
   await browser.reload();
-  await expect(
-    screen.getByRole("heading", "Focus on what matters."),
-  ).toBeVisible();
+  await expect(screen.getByRole("heading", "Your team")).toBeVisible();
 });
 test("logout revokes the server session and protects subsequent navigation", async ({
   browser,
@@ -60,18 +62,22 @@ test("logout revokes the server session and protects subsequent navigation", asy
     screen.getByRole("heading", "Focus on what matters."),
   ).toBeVisible();
   const cookie = (await browser.cookies()).find(
-    (c) => c.name === "ts_session",
+    (c) => c.name === "better-auth.session_token",
   )!;
   await browser.evaluate(async () => {
-    await fetch("/api/v1/session", { method: "DELETE" });
+    await fetch("/api/auth/sign-out", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: "{}",
+    });
     return null;
   });
   await browser.reload();
   await expect(
-    screen.getByRole("heading", "Enter your workspace."),
+    screen.getByRole("heading", "Welcome to your workspace."),
   ).toBeVisible();
   const response = await fetch(runtime().apiOrigin + "/v1/me", {
-    headers: { Cookie: `ts_session=${cookie.value}` },
+    headers: { Cookie: `better-auth.session_token=${cookie.value}` },
   });
   expect(response.status).toBe(401);
 });

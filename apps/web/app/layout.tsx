@@ -1,5 +1,6 @@
 import type { Metadata } from "next";
 import "./globals.css";
+import { Notifications } from "@/components/notifications";
 import { Shell } from "@/components/shell";
 export const metadata: Metadata = {
   title: {
@@ -14,6 +15,7 @@ export default function Layout({ children }: { children: React.ReactNode }) {
     <html lang="en">
       <body>
         <Shell>{children}</Shell>
+        <Notifications />
       </body>
     </html>
   );

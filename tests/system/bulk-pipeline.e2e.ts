@@ -183,8 +183,10 @@ test("a lost upload response can be retried safely with the same idempotency key
     .fill("lost-response.synthetic.test");
   await screen.getByRole("button", "Analyse indicators").click();
   await expect(
-    screen.getByRole("alert").filter({ hasText: "Failed to fetch" }),
-  ).toContainText("Failed to fetch");
+    screen
+      .getByRole("alert")
+      .filter({ hasText: "Check your connection and try again." }),
+  ).toContainText("Check your connection and try again.");
   await screen.getByRole("button", "Analyse indicators").click();
   await expect(screen.getByRole("status")).toHaveText("Analysis complete", {
     timeout: 30000,

@@ -168,8 +168,10 @@ test("unknown assessment identifier displays an error without exposing another r
 }) => {
   await browser.goto("/investigations/nonexistent-synthetic-id");
   await expect(
-    screen.getByRole("alert").filter({ hasText: "Assessment not found" }),
-  ).toContainText("Assessment not found");
+    screen
+      .getByRole("alert")
+      .filter({ hasText: "This item is no longer available." }),
+  ).toContainText("This item is no longer available.");
   await expect(screen.getByRole("button", "Confirm")).not.toBeVisible();
 });
 

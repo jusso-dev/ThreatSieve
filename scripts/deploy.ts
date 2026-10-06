@@ -36,6 +36,7 @@ const config = JSON.parse(
   }[];
   r2_buckets: { bucket_name: string }[];
   vectorize: { index_name: string }[];
+  send_email: { name: string; allowed_sender_addresses: string[] }[];
   queues: {
     producers: { queue: string }[];
     consumers: { queue: string; dead_letter_queue?: string }[];
@@ -45,6 +46,12 @@ config.name = "threatsieve-api-" + stage;
 config.account_id = account;
 config.vars.APP_ENV = stage;
 config.vars.WEB_ORIGIN = webOrigin;
+if (process.env.THREATSIEVE_AUTH_EMAIL_FROM) {
+  config.vars.AUTH_EMAIL_FROM = process.env.THREATSIEVE_AUTH_EMAIL_FROM;
+  config.send_email[0]!.allowed_sender_addresses = [
+    process.env.THREATSIEVE_AUTH_EMAIL_FROM,
+  ];
+}
 config.d1_databases[0]!.database_id = databaseId;
 config.d1_databases[0]!.database_name = "threatsieve-" + stage;
 config.r2_buckets[0]!.bucket_name = "threatsieve-archive-" + stage;

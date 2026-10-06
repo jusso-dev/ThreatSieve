@@ -1,4 +1,5 @@
 "use client";
+import { usePermission } from "@/lib/access";
 import { useState } from "react";
 import { RefreshCw, Database, CheckCircle2 } from "lucide-react";
 import { api, useApi } from "@/lib/api";
@@ -21,6 +22,7 @@ interface Source {
   last_error: string | null;
 }
 export default function Sources() {
+  const canWrite = usePermission("feeds:write");
   const { data, error, loading, reload } = useApi<{ data: Source[] }>(
     "v1/feeds",
   );
@@ -129,7 +131,7 @@ export default function Sources() {
                     <Button
                       variant="outline"
                       size="sm"
-                      disabled={!s.enabled || busy === s.id}
+                      disabled={!canWrite || !s.enabled || busy === s.id}
                       onClick={() => void sync(s.id)}
                     >
                       <RefreshCw size={12} />

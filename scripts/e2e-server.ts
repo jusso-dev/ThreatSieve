@@ -1,3 +1,4 @@
+import { migrationStatements } from "../packages/database/src/migrations";
 /** Ephemeral offline system-test environment. Never uses deployed resources. */
 import { build } from "esbuild";
 import {
@@ -50,6 +51,8 @@ async function main() {
     ),
     bindings: {
       APP_ENV: "development",
+      BETTER_AUTH_SECRET: crypto.randomUUID() + crypto.randomUUID(),
+      AUTH_EMAIL_FROM: "test@example.com",
       WEB_ORIGIN: "http://127.0.0.1:3180",
       AUTO_ACCEPT_THRESHOLD: "0.90",
       REVIEW_THRESHOLD: "0.25",
@@ -83,10 +86,9 @@ async function main() {
     for (const name of readdirSync("migrations")
       .filter((n) => n.endsWith(".sql"))
       .sort()) {
-      for (const statement of readFileSync("migrations/" + name, "utf8")
-        .split(";")
-        .map((s) => s.trim())
-        .filter(Boolean))
+      for (const statement of migrationStatements(
+        readFileSync("migrations/" + name, "utf8"),
+      ))
         await db.prepare(statement).run();
     }
     const seed = await buildDemoSeed();

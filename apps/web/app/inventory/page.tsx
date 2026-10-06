@@ -1,4 +1,5 @@
 "use client";
+import { usePermission } from "@/lib/access";
 import { useState, useEffect } from "react";
 import { Boxes, Check } from "lucide-react";
 import { useApi, api } from "@/lib/api";
@@ -24,6 +25,7 @@ const labels = {
   countries: "Countries",
 };
 export default function Inventory() {
+  const canWrite = usePermission("admin");
   const { data, error, loading } = useApi<Environment>("v1/environment");
   const [form, setForm] = useState<Record<string, string>>({});
   const [message, setMessage] = useState("");
@@ -93,7 +95,7 @@ export default function Inventory() {
               </div>
             ))}
             <div className="full-width modal-actions">
-              <Button disabled={busy}>
+              <Button disabled={busy || !canWrite}>
                 <Check size={14} />
                 {busy ? "Saving…" : "Save environment"}
               </Button>

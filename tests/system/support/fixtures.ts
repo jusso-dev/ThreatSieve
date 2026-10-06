@@ -29,6 +29,9 @@ export async function control(path: string, body: unknown) {
 }
 const Workspace = z.object({
   tenantId: z.string(),
+  email: z.string(),
+  password: z.string(),
+  userId: z.string(),
   keyId: z.string(),
   key: z.string(),
   assessments: z.array(z.custom<Assessment>()),
@@ -54,9 +57,14 @@ export function request(w: Workspace, path: string, init: RequestInit = {}) {
   });
 }
 export async function login(browser: Browser, w: Workspace) {
-  const response = await request(w, "/v1/session", {
+  const response = await fetch(runtime().apiOrigin + "/auth/sign-in/email", {
     method: "POST",
-    headers: { Origin: "http://127.0.0.1:3180" },
+    headers: {
+      Origin: "http://127.0.0.1:3180",
+      "Content-Type": "application/json",
+      "cf-connecting-ip": "192.0.2." + Math.floor(Math.random() * 254),
+    },
+    body: JSON.stringify({ email: w.email, password: w.password }),
   });
   if (response.status !== 201 && response.status !== 200)
     throw new Error("Session setup failed: " + (await response.text()));
