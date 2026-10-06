@@ -24,12 +24,18 @@ class ThreatSieveConnector:
             "connector": {
                 "id": os.environ["CONNECTOR_ID"],
                 "name": os.getenv("CONNECTOR_NAME", "ThreatSieve"),
-                "scope": os.getenv("CONNECTOR_SCOPE", "indicator,malware,attack-pattern,relationship,note"),
+                "scope": os.getenv("CONNECTOR_SCOPE", "indicator,malware,attack-pattern,relationship,note,report,campaign,threat-actor,intrusion-set,infrastructure,vulnerability,observed-data,sighting"),
                 "type": "EXTERNAL_IMPORT",
                 "log_level": "info",
                 "confidence_level": 70,
             },
         })
+        self.collections = [value.strip() for value in os.getenv("THREATSIEVE_COLLECTION_IDS", "").split(",") if value.strip()]
+        from uuid import UUID
+        for value in self.collections:
+            UUID(value)
+        if len(self.collections) > 20:
+            raise ValueError("Configure at most 20 collections per connector")
         self.session = requests.Session()
         self.session.headers.update({"Authorization": "Bearer " + os.environ["THREATSIEVE_API_KEY"]})
 
@@ -56,7 +62,39 @@ class ThreatSieveConnector:
             self.helper.send_stix2_bundle(json.dumps(bundle), work_id=work_id, update=True)
             self.helper.api.work.to_processed(work_id, "ThreatSieve STIX bundle queued")
             # Advance only after the helper has accepted the complete bundle.
-            self.helper.set_state({"export_cursor": export["cursor"]})
+            state["export_cursor"] = export["cursor"]
+            self.helper.set_state(state)
+        self.sync_collections(state)
+
+    def sync_collections(self, state):
+        # Collections are explicitly selected by the operator; no customer telemetry is inferred or exported.
+        from urllib.parse import urlencode
+        from uuid import uuid4
+        snapshots = state.setdefault("collection_snapshots", {})
+        for collection in self.collections:
+            publication = self.get("/v1/collections/" + collection + "/publication")["publication"]
+            if not publication or snapshots.get(collection) == publication["published_at"]:
+                continue
+            next_token = None
+            seen_tokens = set()
+            while True:
+                query = {"limit": 100}
+                if next_token:
+                    query["next"] = next_token
+                page = self.get("/v1/taxii/api/collections/" + collection + "/objects/?" + urlencode(query))
+                if page.get("objects"):
+                    bundle = {"type": "bundle", "id": "bundle--" + str(uuid4()), "objects": page["objects"]}
+                    work_id = self.helper.api.work.initiate_work(self.helper.connect_id, "ThreatSieve collection " + collection)
+                    self.helper.send_stix2_bundle(json.dumps(bundle), work_id=work_id, update=True)
+                    self.helper.api.work.to_processed(work_id, "ThreatSieve collection page queued")
+                if not page.get("more"):
+                    break
+                next_token = page.get("next")
+                if not next_token or next_token in seen_tokens:
+                    raise ValueError("TAXII response missing or repeating continuation")
+                seen_tokens.add(next_token)
+            snapshots[collection] = publication["published_at"]
+            self.helper.set_state(state)
 
     def run(self):
         while True:

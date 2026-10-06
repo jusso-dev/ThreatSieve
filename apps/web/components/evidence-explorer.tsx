@@ -1,4 +1,6 @@
 "use client";
+import Link from "next/link";
+import { useApi } from "@/lib/api";
 import { useState } from "react";
 import { FileSearch, Clock, Copy } from "lucide-react";
 import { percent, relativeTime, absoluteTime } from "@/lib/utils";
@@ -16,6 +18,15 @@ export function EvidenceExplorer({
   selectedIds: string[];
   onClear: () => void;
 }) {
+  const ratings = useApi<{
+    data: {
+      id: string;
+      reliability: string | null;
+      evidence_rating: number | null;
+      rationale: string | null;
+      default_weight: number;
+    }[];
+  }>("v1/source-ratings");
   const [source, setSource] = useState(""),
     [query, setQuery] = useState(""),
     [kind, setKind] = useState(""),
@@ -137,6 +148,21 @@ export function EvidenceExplorer({
             </p>
             <div className="evidence-tags">
               <span>{e.type}</span>
+              <Link
+                className="text-link"
+                href={"/sources/" + e.sourceId}
+                title={
+                  ratings.data?.data.find((r) => r.id === e.sourceId)
+                    ?.rationale ??
+                  "Source quality and workspace reliability policy"
+                }
+              >
+                Source quality{" "}
+                {ratings.data?.data.find((r) => r.id === e.sourceId)
+                  ?.reliability ?? "unrated"}
+                {ratings.data?.data.find((r) => r.id === e.sourceId)
+                  ?.evidence_rating ?? ""}
+              </Link>
               <span>{percent(e.confidence)} source confidence</span>
               <span>
                 {e.behavioural ? "Behavioural evidence" : "Contextual evidence"}

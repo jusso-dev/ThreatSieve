@@ -84,3 +84,11 @@ The suite uses real Better Auth sessions against ephemeral D1, with an email bin
 To refresh account/team README images, run `UPDATE_SCREENSHOTS=1 pnpm test:e2e tests/system/team-access.e2e.ts`. These images use synthetic accounts only.
 
 The offline Worker bundles with the same `workerd`/`worker` export conditions as Wrangler. This ensures Better Auth uses native AsyncLocalStorage instead of its single-request browser fallback. A concurrency regression validates parallel authenticated reads and sign-out against the real Worker runtime.
+
+## Enterprise workspace regressions
+
+`enterprise-workspace.e2e.ts` exercises live ephemeral Worker routes and the production web build: collaborative investigation/task/decision editing, evidence-linked PIR coverage, revision conflicts, tenant isolation across all six object kinds, idempotent sightings, watch notifications, TAXII discovery/manifests/pagination, source policy RBAC, report HTML injection resistance, MISP detection review semantics, command palette routing and mobile overflow. Its screenshot pass refreshes the nine enterprise screenshots embedded in the README.
+
+`enterprise.test.ts` additionally tests source-policy isolation, source ratings, automation redelivery, conservative sighting scoring, relationship assertion history, graph paths, restricted export, webhook target policy/delivery and spreadsheet formula escaping. `enterprise-feeds.test.ts` verifies TAXII continuation safety, MISP object/compound-attribute fidelity and knowledge-only STIX evidence. Tests use synthetic intelligence and intercept remote calls; they do not exercise real recipients or claim model calibration.
+
+The enterprise release adds 10 browser scenarios and brings the full-stack suite to 84 tests. Offline OpenCTI bundle-delivery regression tests run with `python3 -m unittest discover -s tests/opencti -v`; they replace only external clients and never contact a live server.

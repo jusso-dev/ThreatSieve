@@ -52,7 +52,7 @@ export function IntelligenceLibrary() {
     <>
       <PageHeader
         eyebrow="INTELLIGENCE LIBRARY"
-        title="Explore the intelligence."
+        title="Threat library"
         description="Find known entities, resolve aliases and follow the evidence behind their relationships."
         action={
           <div className="actions">

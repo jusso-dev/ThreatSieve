@@ -18,7 +18,7 @@ body {
   margin: 0;
   background: var(--background);
   color: var(--foreground);
-  font-family: Arial, Helvetica, sans-serif;
+  font-family: Geist, system-ui, sans-serif;
   font-size: 13px;
   line-height: 1.5;
   -webkit-font-smoothing: antialiased;
@@ -215,7 +215,7 @@ small {
 .workspace small,
 .profile small {
   display: block;
-  font-size: 9px;
+  font-size: 11px;
   color: #90a29a;
   margin-top: 2px;
   font-weight: 400;
@@ -228,12 +228,12 @@ small {
   border-radius: 5px;
   background: #43544b;
   color: #d2eadc;
-  font-size: 10px;
+  font-size: 11px;
   font-weight: 600;
 }
 .nav-label {
   padding: 0 26px 12px;
-  font-size: 9px;
+  font-size: 11px;
   letter-spacing: 1.6px;
   color: #7e938a;
   font-weight: 600;
@@ -288,7 +288,7 @@ small {
   font-size: 11px;
 }
 .principle p {
-  font-size: 10px;
+  font-size: 11px;
   line-height: 1.8;
   color: #859b8e;
   margin-top: 6px;
@@ -316,7 +316,7 @@ small {
   border-radius: 50%;
   background: #405347;
   color: #c5ddca;
-  font-size: 10px;
+  font-size: 11px;
 }
 .main-shell {
   background: var(--background);
@@ -374,13 +374,13 @@ small {
   border: 1px solid #e3e7ea;
   border-radius: 4px;
   padding: 2px 5px;
-  font-size: 10px;
+  font-size: 11px;
 }
 .top-status {
   display: flex;
   gap: 6px;
   align-items: center;
-  font-size: 10px;
+  font-size: 11px;
   white-space: nowrap;
   color: #70817a;
   padding-left: 24px;
@@ -446,7 +446,7 @@ main {
 }
 .eyebrow {
   color: #82928b;
-  font-size: 9px;
+  font-size: 11px;
   font-weight: 700;
   letter-spacing: 1.5px;
   margin-bottom: 7px;
@@ -470,12 +470,12 @@ h1 {
   border: 1px solid #dde5df;
   border-radius: 5px;
   padding: 9px 12px;
-  font-size: 10px;
+  font-size: 11px;
   color: #698071;
   margin-bottom: 23px;
 }
 .demo-label {
-  font-size: 9px;
+  font-size: 11px;
   font-weight: 600;
   letter-spacing: 0.8px;
   margin-left: auto;
@@ -520,7 +520,7 @@ h1 {
 }
 .attention-strip small {
   color: #9aa29e;
-  font-size: 9px;
+  font-size: 11px;
 }
 .attention-primary strong {
   color: #173b2c;
@@ -567,12 +567,12 @@ h1 {
   font-weight: 600;
 }
 .section-title > span {
-  font-size: 10px;
+  font-size: 11px;
 }
 .count-badge {
   background: #e9edeb;
   color: #78837c;
-  font-size: 9px;
+  font-size: 11px;
   padding: 1px 6px;
   border-radius: 4px;
 }
@@ -648,7 +648,7 @@ h1 {
   color: #274f3f;
 }
 .priority-relevance span {
-  font-size: 10px;
+  font-size: 11px;
   color: #98a19d;
 }
 .priority-relevance svg {
@@ -662,11 +662,11 @@ h1 {
   gap: 6px;
   padding: 11px 0;
   border-top: 1px solid #edf0ee;
-  font-size: 9px;
+  font-size: 11px;
   color: #83928b;
 }
 .severity {
-  font-size: 9px;
+  font-size: 11px;
   text-transform: uppercase;
   letter-spacing: 0.7px;
   font-weight: 600;
@@ -750,7 +750,7 @@ h1 {
   background: #37775b;
 }
 .tabs button span {
-  font-size: 9px;
+  font-size: 11px;
   background: #eef4f0;
   padding: 0 5px;
   border-radius: 3px;
@@ -768,7 +768,7 @@ h1 {
 }
 .inline-search input {
   border: 0;
-  font-size: 10px;
+  font-size: 11px;
   padding: 8px 0;
   width: 145px;
   outline: none;
@@ -785,7 +785,7 @@ h1 {
 .intel-table th {
   padding: 11px 18px;
   font-weight: 500;
-  font-size: 9px;
+  font-size: 11px;
   color: #8b968f;
   background: #fbfcfb;
   letter-spacing: 0.15px;
@@ -793,7 +793,7 @@ h1 {
 .intel-table td {
   padding: 16px 18px;
   border-top: 1px solid #edf0ee;
-  font-size: 10px;
+  font-size: 11px;
 }
 .intel-table tr:hover td {
   background: #fafcfb;
@@ -826,7 +826,7 @@ h1 {
 .observable-cell small {
   display: block;
   color: #99a29c;
-  font-size: 9px;
+  font-size: 11px;
   margin-top: 3px;
 }
 .observable-cell small span {
@@ -862,7 +862,7 @@ h1 {
   display: flex;
   justify-content: space-between;
   color: #98a29b;
-  font-size: 9px;
+  font-size: 11px;
 }
 .table-footer span:last-child {
   display: flex;
@@ -877,7 +877,7 @@ h1 {
   margin: 22px 0;
 }
 .operations-note p {
-  font-size: 10px;
+  font-size: 11px;
   flex: 1;
 }
 .operations-note strong {
@@ -888,7 +888,7 @@ h1 {
   display: flex;
   align-items: center;
   gap: 5px;
-  font-size: 10px;
+  font-size: 11px;
   color: #5f8370;
   white-space: nowrap;
 }
@@ -899,7 +899,7 @@ h1 {
   padding: 15px 36px;
   border-top: 1px solid var(--border);
   color: #9aa59e;
-  font-size: 9px;
+  font-size: 11px;
   background: #f8faf9;
 }
 .app-footer span:first-child {
@@ -1089,7 +1089,7 @@ h1 {
   place-items: center;
   background: #edf3f0;
   color: #6a8e7b;
-  font-size: 10px;
+  font-size: 11px;
   font-weight: 600;
 }
 .evidence-header strong {
@@ -1099,7 +1099,7 @@ h1 {
 .evidence-header small {
   margin-left: auto;
   color: #9aa69e;
-  font-size: 10px;
+  font-size: 11px;
 }
 .evidence-item p {
   font-size: 12px;
@@ -1108,14 +1108,14 @@ h1 {
 }
 .evidence-item details {
   margin-left: 39px;
-  font-size: 10px;
+  font-size: 11px;
   color: #9ba59e;
 }
 .evidence-item pre,
 .raw-json {
   white-space: pre-wrap;
   overflow-wrap: anywhere;
-  font-size: 10px;
+  font-size: 11px;
   background: #f7f9f7;
   padding: 12px;
   border-radius: 5px;
@@ -1126,7 +1126,7 @@ h1 {
   margin-left: 39px;
   display: flex;
   gap: 8px;
-  font-size: 9px;
+  font-size: 11px;
   color: #789080;
 }
 .evidence-tags span {
@@ -1155,7 +1155,7 @@ h1 {
 .reason {
   display: flex;
   gap: 7px;
-  font-size: 10px;
+  font-size: 11px;
   color: #728676;
   padding: 8px 0;
 }
@@ -1176,7 +1176,7 @@ h1 {
 .attack-item small {
   display: block;
   margin-top: 6px;
-  font-size: 9px;
+  font-size: 11px;
   color: #92a094;
 }
 .tag {
@@ -1186,7 +1186,7 @@ h1 {
   border: 1px solid #dce5de;
   border-radius: 4px;
   padding: 3px 7px;
-  font-size: 9px;
+  font-size: 11px;
   color: #6e8878;
 }
 .graph {
@@ -1215,12 +1215,12 @@ h1 {
 }
 .graph-node strong {
   display: block;
-  font-size: 10px;
+  font-size: 11px;
   overflow: hidden;
   text-overflow: ellipsis;
 }
 .graph-node small {
-  font-size: 8px;
+  font-size: 11px;
   color: #8ca190;
   text-transform: uppercase;
   letter-spacing: 0.5px;
@@ -1239,7 +1239,7 @@ h1 {
   align-items: center;
   gap: 6px;
   flex-shrink: 0;
-  font-size: 8px;
+  font-size: 11px;
 }
 .graph-root {
   border-color: #6a9980;
@@ -1265,7 +1265,7 @@ h1 {
   text-align: left;
 }
 .source-table th {
-  font-size: 10px;
+  font-size: 11px;
   font-weight: 500;
   color: #8b9a90;
   padding: 12px 16px;
@@ -1290,17 +1290,17 @@ h1 {
   background: #f0f4f0;
   border: 1px solid #e3eae2;
   border-radius: 6px;
-  font-size: 10px;
+  font-size: 11px;
   color: #728e79;
 }
 .source-license {
-  font-size: 9px;
+  font-size: 11px;
   color: #95a08d;
   margin-top: 4px;
   max-width: 250px;
 }
 .status-label {
-  font-size: 10px;
+  font-size: 11px;
   display: flex;
   align-items: center;
   gap: 7px;
@@ -1442,13 +1442,13 @@ h1 {
   width: 100%;
 }
 .sign-in-note {
-  font-size: 10px !important;
+  font-size: 11px !important;
   line-height: 1.8;
   margin-top: 20px;
 }
 .tooltip-note {
   color: #899c8d;
-  font-size: 10px;
+  font-size: 11px;
   margin-top: 10px;
 }
 .chart-container {
@@ -1631,7 +1631,7 @@ h1 {
     color: #638371;
   }
   .global-search input {
-    font-size: 10px;
+    font-size: 11px;
   }
   .global-search kbd {
     display: none;
@@ -1651,7 +1651,7 @@ h1 {
     margin-left: auto;
   }
   .eyebrow {
-    font-size: 8px;
+    font-size: 11px;
   }
   .attention-strip {
     grid-template-columns: 1fr 1fr;
@@ -1666,14 +1666,14 @@ h1 {
     font-size: 29px;
   }
   .attention-strip small {
-    font-size: 9px;
+    font-size: 11px;
   }
   .attention-strip > div,
   .attention-strip > button {
     padding: 0 20px;
   }
   .demo-banner {
-    font-size: 9px;
+    font-size: 11px;
     align-items: flex-start;
   }
   .demo-banner svg {
@@ -1702,7 +1702,7 @@ h1 {
     gap: 19px;
   }
   .tabs button {
-    font-size: 10px;
+    font-size: 11px;
   }
   .panel-toolbar {
     padding: 0 15px;
@@ -1717,7 +1717,7 @@ h1 {
   .app-footer {
     padding: 16px 18px;
     flex-wrap: wrap;
-    font-size: 8px;
+    font-size: 11px;
   }
   .investigation-side {
     display: block;
@@ -2548,7 +2548,7 @@ section[id] {
   inset: 0;
 }
 .graph-stage text {
-  font-size: 10px;
+  font-size: 11px;
   fill: #456754;
   paint-order: stroke;
   stroke: #f8fbf9;
@@ -2564,7 +2564,7 @@ section[id] {
   text-align: left;
 }
 .positioned-node small {
-  font-size: 10px;
+  font-size: 11px;
   color: #526c5e;
 }
 .positioned-node strong {

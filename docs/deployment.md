@@ -35,7 +35,7 @@ pnpm exec wrangler secret put URLHAUS_AUTH_KEY --name threatsieve-api-staging
 
 Generate the deployment config first with the deployment script's config-only mode described in `pnpm exec tsx scripts/deploy.ts --help`, then apply migrations before deploying traffic. Never commit generated credentials, `.dev.vars`, `.env.local`, real tenant bootstrap artifacts or raw customer intelligence.
 
-Existing installations must apply all migrations through `0008_analyst_views.sql` before running this release. Migration 0008 adds personal saved views and browsing/sorting indexes without changing existing intelligence. Migration 0006 preserves existing users, tenant IDs and memberships while adding Better Auth tables; migration 0007 protects the final admin with D1 triggers. Migration 0005 preserves legacy exports and adds assessment revisions. Local `pnpm db:migrate` applies these to the development database.
+Existing installations must apply all migrations through `0014_tag_events.sql` before running this release. Migration 0008 adds personal saved views and browsing/sorting indexes without changing existing intelligence. Migration 0006 preserves existing users, tenant IDs and memberships while adding Better Auth tables; migration 0007 protects the final admin with D1 triggers. Migration 0005 preserves legacy exports and adds assessment revisions. Local `pnpm db:migrate` applies these to the development database.
 
 ## Release
 
@@ -81,3 +81,11 @@ The production acceptance check on 2026-10-06 exercised real Clef-flash and Clef
 The EC2-hosted OpenCTI integration is documented in [OpenCTI hosting](opencti-hosting.md). ThreatSieve itself has no EKS dependency.
 
 The Better Auth release applies migrations 0006–0007 and preserves existing organization membership and API keys. Production checks verified API-key compatibility (200), anonymous session lookup (200 with null), anonymous tenant access (401), disabled key-to-browser-session exchange (401), rejected foreign-Origin login (403), and rendered sign-in/recovery screens without browser exceptions. Invitation delivery and password resets are exercised with a captured email binding in the offline suite; live mailbox delivery is not asserted by those tests.
+
+## Enterprise workspace release
+
+Migrations 0009–0014 add scoped workspace objects, sightings, source ratings, durable change events, matches, automation execution history, TAXII snapshots, source policy and relationship assertion history. They are additive; no existing intelligence tables are dropped. Record a D1 Time Travel bookmark before applying them. Deploy the API after migrations, then the web Worker. Retain the previous Worker version for application rollback; additive tables can remain in place. Do not seed production.
+
+New operations jobs share the existing ingest queue and its dead-letter controls. Review queue age and D1 storage growth after enabling broad watchlists/requirements. Initial matching is asynchronous and can process many existing records. The pipeline does not claim that an arbitrary million-record workload has been load-tested. Configure retention for archives, event histories, old TAXII generations and execution records according to contractual requirements before commercial rollout.
+
+Optional source and integration settings are documented in [TAXII/MISP](taxii-misp.md) and [automation](automation.md). Keep credentials and integration target configuration in encrypted Worker environment values; the repository contains no active webhook targets.

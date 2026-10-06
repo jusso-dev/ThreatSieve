@@ -18,7 +18,7 @@ pnpm bootstrap
 pnpm dev
 ```
 
-Open **http://127.0.0.1:3000**. The API listens on **http://127.0.0.1:8787**. Bootstrap applies local migrations and seeds six explicitly synthetic scenarios. It creates a random local API key in `credentials.local.json` and a development-only server credential in `apps/web/.env.local`. Both files are ignored by Git. The frontend uses this credential only when `NODE_ENV=development`; production requires sign-in.
+Open **http://127.0.0.1:3000**. The API listens on **http://127.0.0.1:8787**. Bootstrap applies local migrations and seeds six explicitly synthetic scenarios plus example requirements, investigations, watchlists, collections, reports and a paused playbook. It creates a random local API key in `credentials.local.json` and a development-only server credential in `apps/web/.env.local`. Both files are ignored by Git. The frontend uses this credential only when `NODE_ENV=development`; production requires sign-in.
 
 The seeded UI works without calling AI. **New assessments call real Workers AI**, including during local Wrangler development. Authenticate with `pnpm exec wrangler login` before making live assessments. There is no silent substitute for an unavailable classifier. Copy `.dev.vars.example` to `.dev.vars` and supply ThreatFox and URLhaus keys to enable those feeds. MITRE, MISP Galaxy, Feodo and CISA KEV require no application credential.
 
@@ -34,8 +34,16 @@ pnpm --silent cli attack T1071.001 --json
 
 Sync MITRE first, then MISP, then indicator feeds so canonical knowledge is available for candidate retrieval. Feed imports are asynchronous. Check source status in the UI. `example.com` with no supporting intelligence should produce an **unknown** assessment, not an invented malicious verdict.
 
-## Implemented vertical slice
+## Intelligence operations platform
 
+- Intelligence requirements with collection criteria, evidence-linked coverage, freshness, confidence and explicit gaps.
+- Collaborative investigations with hypotheses, tasks, cited intelligence, revision checks and timestamped decisions.
+- Canonical dossiers with separate, explainable threat, confidence, relevance and priority scores.
+- First-class private sightings, watchlists, matched intelligence, notifications, collections and authored reports.
+- Filtered bounded graph exploration, shortest visible connection paths, evidence pivots and Cmd/Ctrl+K search.
+- Source reliability ratings, tenant source policy, sync history, quarantined records and replay.
+- Event playbooks using the existing outbox/queues, with execution history and approved webhook delivery.
+- Tenant-authenticated TAXII 2.1 collection snapshots and MISP event exchange.
 - Six required source adapters with Zod validation, deterministic identities, source provenance and R2 archival.
 - D1 graph storage, actor aliases, bounded graph candidates and optional Vectorize retrieval.
 - Clef-flash → confidence gate → Clef escalation. Full question distributions and candidate sets are retained.
@@ -50,6 +58,8 @@ Sync MITRE first, then MISP, then indicator feeds so canonical knowledge is avai
 - STIX 2.1 export and a Python OpenCTI connector using `OpenCTIConnectorHelper.send_stix2_bundle`.
 - Optional provider adapters for OTX, VirusTotal, GreyNoise, TAXII, STIX and MISP; disabled unless explicitly configured.
 - Offline evaluation metrics and browser/integration/security tests.
+
+[Analyst workflows and boundaries](docs/intelligence-operations.md) · [Automation](docs/automation.md) · [TAXII and MISP](docs/taxii-misp.md) · [Enterprise architecture](docs/enterprise-upgrade.md)
 
 ## Commands
 
@@ -75,13 +85,51 @@ Hosted workspace: **[ThreatSieve on Cloudflare](https://threatsieve-web-producti
 
 See [deployment](docs/deployment.md) for resource provisioning, migration review, secrets, staging and protected production releases. The checked-in D1 identifier is local-only and the deployment script requires a real ID. Nothing deploys to a Cloudflare account merely by installing or building the project.
 
-Commercial readiness still requires a deployment-specific review: provider redistribution agreements, measured model evaluations, customer SSO, retention policy, operational alerting, load tests and OpenCTI/Workers AI acceptance tests in the target environment. This repository provides a working MVP implementation and explicit scale/security boundaries; it does not claim those operational acceptance checks have happened automatically.
+Commercial readiness still requires a deployment-specific review: provider redistribution agreements, measured model evaluations, customer SSO, retention policy, operational alerting, load tests and OpenCTI/Workers AI acceptance tests in the target environment. This repository provides an operational intelligence workspace and explicit scale/security boundaries; it does not claim those operational acceptance checks have happened automatically.
 
 ## Design constraints
 
 Models select existing candidates and cannot create intelligence entities. An ATT&CK relationship from malware to a technique is a candidate, not proof that an indicator exhibited that behaviour. Actor similarity is not attribution. Private telemetry is tenant-scoped. Exports omit non-redistributable evidence by default. All remediation actions are recommendations.
 
 ## Screenshots
+
+Screenshots use explicitly synthetic demonstration intelligence.
+
+### Intelligence requirements
+
+![Requirements prioritized by coverage, freshness, confidence and linked evidence](docs/images/requirements.png)
+
+### Requirement dossier
+
+![Intelligence question, collection criteria, supporting evidence and explicit gaps](docs/images/requirement-detail.png)
+
+### Collaborative investigation
+
+![Analyst hypothesis, tasks, pinned intelligence, graph and decision history](docs/images/analyst-investigation.png)
+
+### Canonical entity dossier
+
+![Separate threat, confidence, relevance and priority factors with source provenance](docs/images/entity-dossier.png)
+
+### Watchlists
+
+![Tenant watchlists with deterministic collection criteria](docs/images/watchlists.png)
+
+### Collections
+
+![Curated intelligence packages for controlled distribution](docs/images/collections.png)
+
+### Intelligence report
+
+![Analyst-authored intelligence report with original evidence references](docs/images/intelligence-report.png)
+
+### Automation
+
+![Event-driven playbooks with bounded actions and execution history](docs/images/automation.png)
+
+### Source operations
+
+![Feed health, collection history, source ratings, policy and provenance](docs/images/source-operations.png)
 
 Captured from the running application with the labelled synthetic demo dataset. These images show the desktop workspace and responsive mobile layout; displayed probabilities are demonstration values.
 

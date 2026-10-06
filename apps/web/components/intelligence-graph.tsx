@@ -1,5 +1,10 @@
 "use client";
 import Link from "next/link";
+import { PinToWorkspace } from "./workspace-references";
+import {
+  shortestPath,
+  connectedNodes,
+} from "../../../packages/enterprise/src/graph";
 import { useMemo, useState } from "react";
 import { Network, ArrowUpRight, Plus, Minus, RotateCcw } from "lucide-react";
 import { useApi } from "@/lib/api";
@@ -12,20 +17,54 @@ import type {
 } from "../../../packages/schemas/src/index";
 
 export function IntelligenceGraph({ entityId }: { entityId: string }) {
+  const [root, setRoot] = useState(entityId),
+    [hidden, setHidden] = useState<string[]>([]),
+    [confidence, setConfidence] = useState("0"),
+    [source, setSource] = useState(""),
+    [relationship, setRelationship] = useState(""),
+    [entityType, setEntityType] = useState(""),
+    [from, setFrom] = useState(""),
+    [to, setTo] = useState(""),
+    [pathTarget, setPathTarget] = useState("");
+  const query = new URLSearchParams({ depth: "2", confidence });
+  if (source) query.set("source", source);
+  if (relationship) query.set("relationship", relationship);
+  if (entityType) query.set("entityType", entityType);
+  if (from) query.set("from", new Date(from).toISOString());
+  if (to) query.set("to", new Date(to + "T23:59:59.999Z").toISOString());
   const [depth, setDepth] = useState("2"),
     [selected, setSelected] = useState(""),
     [mode, setMode] = useState("graph"),
     [zoom, setZoom] = useState(1);
-  const { data, error, loading } = useApi<{
+  query.set("depth", depth);
+  const {
+    data: raw,
+    error,
+    loading,
+  } = useApi<{
     nodes: IntelEntity[];
     edges: IntelRelationship[];
     truncated: boolean;
-  }>("v1/graph/" + encodeURIComponent(entityId) + "?depth=" + depth);
+    sightedEntityIds: string[];
+  }>("v1/graph/" + encodeURIComponent(root) + "?" + query);
+  const data = useMemo(() => {
+    if (!raw) return raw;
+    const ids = connectedNodes(raw.edges, root, hidden);
+    return {
+      ...raw,
+      nodes: raw.nodes.filter((n) => ids.has(n.id)),
+      edges: raw.edges.filter(
+        (e) => ids.has(e.sourceEntityId) && ids.has(e.targetEntityId),
+      ),
+    };
+  }, [raw, root, hidden]);
+  const path =
+    pathTarget && data ? shortestPath(data.edges, root, pathTarget) : null;
   const layout = useMemo(() => {
     const nodes = data?.nodes ?? [];
     const edges = data?.edges ?? [];
-    const levels = new Map<string, number>([[entityId, 0]]);
-    let frontier = [entityId];
+    const levels = new Map<string, number>([[root, 0]]);
+    let frontier = [root];
     for (let d = 1; d <= 3; d++) {
       const next: string[] = [];
       for (const id of frontier) {
@@ -58,8 +97,8 @@ export function IntelligenceGraph({ entityId }: { entityId: string }) {
       width: Math.max(620, (Math.max(0, ...levels.values()) + 1) * 260 + 24),
       height: Math.max(290, Math.max(0, ...counts.values()) * 110 + 30),
     };
-  }, [data, entityId]);
-  const node = data?.nodes.find((n) => n.id === (selected || entityId));
+  }, [data, root]);
+  const node = data?.nodes.find((n) => n.id === (selected || root));
   const byId = new Map(data?.nodes.map((n) => [n.id, n]) ?? []);
   const edges =
     mode === "list"
@@ -147,6 +186,132 @@ export function IntelligenceGraph({ entityId }: { entityId: string }) {
           </div>
         )}
       </div>
+      <div className="graph-filters">
+        <label>
+          Minimum confidence
+          <select
+            value={confidence}
+            onChange={(e) => setConfidence(e.target.value)}
+          >
+            <option value="0">All confidence levels</option>
+            <option value="0.5">50% or higher</option>
+            <option value="0.7">70% or higher</option>
+            <option value="0.9">90% or higher</option>
+          </select>
+        </label>
+        <label>
+          Entity type
+          <select
+            value={entityType}
+            onChange={(e) => setEntityType(e.target.value)}
+          >
+            <option value="">All types</option>
+            {[
+              "observable",
+              "threat-actor",
+              "intrusion-set",
+              "malware",
+              "tool",
+              "campaign",
+              "attack-technique",
+              "vulnerability",
+              "infrastructure",
+              "report",
+            ].map((t) => (
+              <option key={t}>{t}</option>
+            ))}
+          </select>
+        </label>
+        <label>
+          Source ID
+          <input
+            value={source}
+            placeholder="All sources"
+            onChange={(e) => setSource(e.target.value)}
+          />
+        </label>
+        <label>
+          Relationship
+          <select
+            value={relationship}
+            onChange={(e) => setRelationship(e.target.value)}
+          >
+            <option value="">All relationships</option>
+            {[
+              "USES",
+              "INDICATES",
+              "ATTRIBUTED_TO",
+              "RESOLVES_TO",
+              "TARGETS",
+              "HOSTS",
+              "COMMUNICATES_WITH",
+              "REFERENCES",
+              "EXPLOITS",
+            ].map((r) => (
+              <option key={r}>{r}</option>
+            ))}
+          </select>
+        </label>
+        <label>
+          Observed after
+          <input
+            type="date"
+            value={from}
+            onChange={(e) => setFrom(e.target.value)}
+          />
+        </label>
+        <label>
+          Observed before
+          <input
+            type="date"
+            value={to}
+            onChange={(e) => setTo(e.target.value)}
+          />
+        </label>
+        <label>
+          Shortest connection path to
+          <select
+            value={pathTarget}
+            onChange={(e) => setPathTarget(e.target.value)}
+          >
+            <option value="">Choose an entity</option>
+            {data?.nodes
+              .filter((n) => n.id !== root)
+              .map((n) => (
+                <option value={n.id} key={n.id}>
+                  {n.name}
+                </option>
+              ))}
+          </select>
+        </label>
+        <Button
+          variant="ghost"
+          size="sm"
+          onClick={() => {
+            setRoot(entityId);
+            setHidden([]);
+            setSource("");
+            setConfidence("0");
+            setRelationship("");
+            setEntityType("");
+            setFrom("");
+            setTo("");
+            setPathTarget("");
+            setSelected("");
+          }}
+        >
+          Reset neighbourhood
+        </Button>
+      </div>
+      {pathTarget && (
+        <p className="tooltip-note">
+          {path
+            ? path
+                .map((id) => data?.nodes.find((n) => n.id === id)?.name ?? id)
+                .join(" ↔ ")
+            : "No path exists in the current bounded neighbourhood."}
+        </p>
+      )}
       <DataState loading={loading} error={error} />
       {data && !loading && (
         <>
@@ -207,7 +372,12 @@ export function IntelligenceGraph({ entityId }: { entityId: string }) {
                                 ? "#a27632"
                                 : "#71877e"
                             }
-                            strokeWidth={1.5}
+                            strokeWidth={
+                              path?.includes(edge.sourceEntityId) &&
+                              path.includes(edge.targetEntityId)
+                                ? 3.5
+                                : 1.5
+                            }
                             strokeDasharray={
                               edge.assertionType === "model_inferred"
                                 ? "5 4"
@@ -235,14 +405,23 @@ export function IntelligenceGraph({ entityId }: { entityId: string }) {
                         key={n.id}
                         className={
                           "graph-node positioned-node " +
-                          (node?.id === n.id ? "graph-root" : "")
+                          (node?.id === n.id ? "graph-root" : "") +
+                          (data.sightedEntityIds?.includes(n.id)
+                            ? " has-sighting"
+                            : "") +
+                          (path?.includes(n.id) ? " path-node" : "")
                         }
                         style={{ left: pos.x, top: pos.y }}
                         aria-pressed={node?.id === n.id}
                         onClick={() => setSelected(n.id)}
                         title={n.name}
                       >
-                        <small>{n.type.replaceAll("-", " ")}</small>
+                        <small>
+                          {n.type.replaceAll("-", " ")}
+                          {data.sightedEntityIds?.includes(n.id)
+                            ? " · seen internally"
+                            : ""}
+                        </small>
                         <strong>
                           {n.externalId ? n.externalId + " · " : ""}
                           {n.name}
@@ -261,6 +440,39 @@ export function IntelligenceGraph({ entityId }: { entityId: string }) {
                 <strong>{node.name}</strong>
                 <small>Source: {node.provenance.sourceName}</small>
                 <p>{node.description.slice(0, 600)}</p>
+                <div className="actions">
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={() => {
+                      setRoot(node.id);
+                      setSelected("");
+                      setHidden([]);
+                      setPathTarget("");
+                      setDepth("1");
+                    }}
+                  >
+                    Expand neighbours
+                  </Button>
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    disabled={node.id === root}
+                    onClick={() => {
+                      setHidden((h) => [...h, node.id]);
+                      setSelected("");
+                    }}
+                  >
+                    Collapse branch
+                  </Button>
+                  <PinToWorkspace
+                    reference={{
+                      type: "entity",
+                      id: node.id,
+                      relation: "investigates",
+                    }}
+                  />
+                </div>
               </div>
               <Link
                 className="text-link"

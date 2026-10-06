@@ -68,3 +68,75 @@ Saved views require `assessment:read` and are personal to the authenticated user
 - `DELETE /v1/saved-views/:id`: delete an owned view; foreign IDs return 404.
 
 Saved-view writes are audited. URLs and saved filters convey no authorization. Browser links still require a valid session and tenant membership.
+
+## Enterprise workspace APIs
+
+All routes below require the existing authenticated tenant context. Reads use `intel:read`; writes use `assessment:write`. Playbook changes and source trust policy additionally require `admin`. No route accepts an arbitrary tenant override.
+
+| Route                                      | Behavior                                                                        |
+| ------------------------------------------ | ------------------------------------------------------------------------------- |
+| `GET/POST /v1/requirements`                | Browse/create intelligence requirements                                         |
+| `GET/POST /v1/investigations`              | Browse/create collaborative investigations                                      |
+| `GET/POST /v1/watchlists`                  | Browse/create deterministic watches                                             |
+| `GET/POST /v1/collections`                 | Browse/create curated collections                                               |
+| `GET/POST /v1/reports`                     | Browse/create authored reports                                                  |
+| `GET/POST /v1/playbooks`                   | Browse/create bounded event automation                                          |
+| `GET/PUT /v1/{module}/:id`                 | Detail/revision-protected edit                                                  |
+| `POST /v1/{module}/:id/notes`              | Append a note or analyst decision                                               |
+| `GET /v1/{module}/:id/export?format=`      | JSON, CSV, STIX, MISP or printable HTML; excludes playbooks                     |
+| `GET /v1/workspace/:id/matches`            | Paginated source/evidence-backed match suggestions                              |
+| `GET /v1/workspace/search?q=`              | Federated tenant workspace search                                               |
+| `GET /v1/workspace/references?type=&q=`    | Authorized citation/pin selection                                               |
+| `GET /v1/workspace/reference-labels?refs=` | Bounded batch reference labels                                                  |
+| `GET /v1/workspace/members`                | Owners/collaborators available within the tenant                                |
+| `POST /v1/observables`                     | Create a private normalized observable without classifying it                   |
+| `GET/POST /v1/sightings`                   | Browse/record observations with idempotent source event IDs                     |
+| `GET /v1/entities/:id/dossier`             | Canonical intelligence, factors, relationships, evidence, sightings and history |
+| `GET /v1/entities/:id/timeline?days=`      | 1/7/30/90/365/all retained event windows                                        |
+| `GET /v1/evidence/:id`                     | Authorized evidence and provenance                                              |
+| `GET /v1/notifications`                    | Workspace match/action notifications                                            |
+| `POST /v1/notifications/:id/read`          | Personal read receipt; `intel:read` permitted                                   |
+| `GET /v1/playbooks/:id/executions`         | Bounded execution history and queued-action IDs                                 |
+| `GET /v1/integrations`                     | Approved integration IDs/names, never credentials                               |
+| `GET /v1/feeds/:id/quality`                | Collection metrics, sampled reviews, errors, evidence and licensing             |
+| `PUT /v1/feeds/:id/rating`                 | Workspace Admiralty reliability/credibility rating with rationale               |
+| `PUT /v1/feeds/:id/policy`                 | Include/exclude a source for this tenant's new assessments                      |
+| `GET /v1/source-ratings`                   | Source-quality labels for evidence views                                        |
+| `POST /v1/collections/:id/publish`         | Materialize an explicit TAXII snapshot                                          |
+| `GET /v1/collections/:id/publication`      | Snapshot revision/time/object count                                             |
+
+Browse endpoints accept `q`, `status`, `cursor`, and `limit` (1–100). Replies contain `data` and `next_cursor`. Workspace IDs use UUIDs; automation-created investigations use stable action identities. All clients should treat IDs as opaque strings.
+
+Creation examples:
+
+```json
+{
+  "title": "Actively exploited technologies",
+  "question": "Which actively exploited vulnerabilities affect our environment?",
+  "priority": "high",
+  "status": "active",
+  "criteria": { "technologies": ["FortiOS"], "sourceIds": ["cisa-kev"] },
+  "references": []
+}
+```
+
+```json
+{
+  "observable": { "observable": "192.0.2.4" },
+  "source": "dns",
+  "externalId": "sensor-event-42",
+  "observedAt": "2026-10-06T01:00:00.000Z",
+  "asset": "Example workstation",
+  "count": 3,
+  "confidence": 0.9,
+  "context": "Synthetic documentation example"
+}
+```
+
+Updates require `{"object": {...complete object input...}, "expected_revision": 1, "reason": "Why the analyst changed it"}`. Creation records the authenticated author. Revision conflicts return 409 and do not partially update links/history. Oversized operational JSON requests return 413 at 128 KiB. Unavailable and cross-tenant records both return 404. Export HTML escapes text and disallows scripts; CSV escapes spreadsheet formulas.
+
+Graph filters now accept `confidence` (0–1), `source`, `relationship`, `entityType`, `from` and `to` alongside depth. Responses include authorized `sightedEntityIds` and `truncated`.
+
+TAXII protocol endpoints, content types and pagination are documented in [TAXII/MISP](taxii-misp.md). Structured schemas are in `packages/schemas/src/enterprise.ts`.
+
+Entity tags are tenant-scoped: `POST /v1/entities/:id/tags` accepts `{ "tag": "priority-hunt", "operation": "add", "reason": "Hunt scope" }` (`remove` is also supported). Dossiers return `workspaceTags`. Automatic watchlist memberships appear in match results as `automatic_member`; `DELETE /v1/watchlists/:id/members/:entityId` removes that membership with an audit event. These mutations require `assessment:write`.

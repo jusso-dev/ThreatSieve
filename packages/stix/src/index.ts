@@ -45,7 +45,12 @@ export function indicatorPattern(a: Assessment): string | undefined {
     file: "file:name",
     process: "process:command_line",
   };
-  const path = paths[a.observable.type];
+  const path =
+    a.observable.type === "cidr"
+      ? value.includes(":")
+        ? "ipv6-addr:value"
+        : "ipv4-addr:value"
+      : paths[a.observable.type];
   return path ? `[${path} = '${value}']` : undefined;
 }
 export function exportStix(

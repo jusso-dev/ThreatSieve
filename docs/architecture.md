@@ -49,3 +49,30 @@ Queries are paginated and graph depth/node counts are bounded. Feed archives are
 3. MISP aliases, remaining required feeds, candidate retrieval and conservative classification.
 4. Investigation, feedback, asynchronous bulk jobs, STIX and OpenCTI.
 5. Security, migration/integration tests, evaluation tooling and deployment runbook.
+
+## Human intelligence operations
+
+```mermaid
+flowchart TD
+  Sources[Existing source adapters] --> Pipeline[Normalize / enrich / correlate / bounded Clef]
+  Pipeline --> Intel[(Canonical entities / provenance / evidence)]
+  Pipeline --> Assessments[(Immutable assessments)]
+  Sightings[Tenant observations] --> Private[(Scoped sightings / customer evidence)]
+  Intel --> Dossier[Canonical dossier + deterministic score factors]
+  Private --> Dossier
+  Assessments --> Dossier
+  PIR[Intelligence requirements] --> Match[Deterministic candidate matching]
+  Watches[Watchlists / filtered collections] --> Match
+  Changes[(Committed intelligence changes)] --> Outbox[Existing D1 outbox / queues / leases]
+  Outbox --> Match
+  Outbox --> Playbooks[Bounded playbooks]
+  Match --> Suggestions[Evidence-linked match suggestions]
+  Suggestions --> Analyst[Analyst review]
+  Analyst --> Cases[Collaborative investigations / notes / decisions]
+  Cases --> Reports[Authored reports / curated collections]
+  Reports --> Distribution[STIX / MISP / authenticated TAXII]
+  Distribution --> OpenCTI[Optional OpenCTI connector helper]
+  Playbooks --> Notifications[Notifications / tasks / approved integrations]
+```
+
+The operations package extends the existing repository and queue stages. It does not introduce a separate graph database or independent model pipeline. Collection matching, confidence factors, coverage, reporting and automation contain no generative model calls. Model-origin decisions remain explicit in existing assessments and STIX metadata.

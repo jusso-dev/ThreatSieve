@@ -1,7 +1,7 @@
 "use client";
 import { usePermission } from "@/lib/access";
 import Link from "next/link";
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { useRouter } from "next/navigation";
 import {
   ArrowUpRight,
@@ -104,6 +104,12 @@ export function Operations() {
   }>("v1/assessments?" + params.toString());
   const [observable, setObservable] = useState("");
   const [showAssess, setShowAssess] = useState(false);
+  useEffect(() => {
+    if (urlParams.get("assess") === "1" && canWrite) {
+      setShowAssess(true);
+      update({ assess: "" }, true);
+    }
+  }, [urlParams, canWrite]);
   const [busy, setBusy] = useState(false);
   const [assessError, setAssessError] = useState("");
   const router = useRouter();
@@ -249,7 +255,7 @@ export function Operations() {
     <>
       <PageHeader
         eyebrow="THREAT OPERATIONS"
-        title="Focus on what matters."
+        title="Threat operations"
         description="Your intelligence, correlated and prioritised for action."
         action={
           <div className="actions">

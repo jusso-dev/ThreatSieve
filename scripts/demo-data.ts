@@ -1,3 +1,4 @@
+import { WorkInput, type WorkObject } from "../packages/schemas/src/enterprise";
 import { hashPassword } from "better-auth/crypto";
 import { normalise, digest } from "../packages/intel/src/normalise";
 import {
@@ -548,6 +549,149 @@ export async function buildDemoSeed() {
       ["cluster_id", "observable_id", "evidence_id"],
       [cluster.id, (await normalise(scenarios[i]!.value)).id, "demo-ev-" + i],
     );
+  for (const [id, raw] of [
+    [
+      "11111111-1111-4111-8111-111111111111",
+      {
+        kind: "requirement",
+        title: "Demo: exposed technology intelligence",
+        question: "Which observed threats affect our exposed technologies?",
+        status: "draft",
+        priority: "high",
+        criteria: { keywords: ["beacon"] },
+        gaps: [
+          "Synthetic examples only. Live collection has not been evaluated.",
+        ],
+        references: [
+          {
+            type: "assessment",
+            id: firstAssessment!.assessment_id,
+            relation: "supports",
+          },
+        ],
+      },
+    ],
+    [
+      "22222222-2222-4222-8222-222222222222",
+      {
+        kind: "investigation",
+        title: "Demo: investigate shared infrastructure",
+        hypothesis:
+          "Shared infrastructure alone does not support actor attribution.",
+        priority: "high",
+        tasks: [
+          {
+            id: "validate",
+            title: "Validate independent source evidence",
+            done: false,
+          },
+        ],
+        references: [
+          {
+            type: "entity",
+            id: firstAssessment!.observable.id,
+            relation: "investigates",
+          },
+        ],
+      },
+    ],
+    [
+      "33333333-3333-4333-8333-333333333333",
+      {
+        kind: "watchlist",
+        title: "Demo: infrastructure watch",
+        status: "paused",
+        criteria: { keywords: ["beacon"] },
+      },
+    ],
+    [
+      "44444444-4444-4444-8444-444444444444",
+      {
+        kind: "collection",
+        title: "Demo: October evidence package",
+        references: [
+          {
+            type: "assessment",
+            id: firstAssessment!.assessment_id,
+            relation: "member",
+          },
+        ],
+      },
+    ],
+    [
+      "55555555-5555-4555-8555-555555555555",
+      {
+        kind: "report",
+        title: "Demo: infrastructure threat brief",
+        body: "This synthetic brief demonstrates evidence-backed intelligence reporting.\n\nThe source evidence supports review of the observed infrastructure. Actor attribution remains unknown. Verify observations before operational use.",
+        references: [
+          {
+            type: "assessment",
+            id: firstAssessment!.assessment_id,
+            relation: "references",
+          },
+        ],
+      },
+    ],
+    [
+      "66666666-6666-4666-8666-666666666666",
+      {
+        kind: "playbook",
+        title: "Demo: notify on sightings",
+        status: "paused",
+        trigger: "sighting.created",
+        actions: [{ type: "notify" }],
+      },
+    ],
+  ] as const) {
+    const work: WorkObject = {
+      ...WorkInput.parse(raw),
+      id,
+      ownerId: analyst,
+      tenantId: tenant,
+      revision: 1,
+      createdBy: analyst,
+      createdAt: now,
+      updatedAt: now,
+    };
+    insert(
+      "workspace_objects",
+      [
+        "tenant_id",
+        "id",
+        "kind",
+        "title",
+        "status",
+        "priority",
+        "owner_id",
+        "revision",
+        "change_id",
+        "data",
+        "created_at",
+        "updated_at",
+      ],
+      [
+        tenant,
+        id,
+        work.kind,
+        work.title,
+        work.status,
+        work.priority,
+        analyst,
+        1,
+        "demo:" + id,
+        JSON.stringify(work),
+        now,
+        now,
+      ],
+    );
+    for (const ref of work.references)
+      insert(
+        "workspace_links",
+        ["tenant_id", "object_id", "target_type", "target_id", "relation"],
+        [tenant, id, ref.type, ref.id, ref.relation],
+      );
+  }
   return {
     statements: sql,
     tenant,

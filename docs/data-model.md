@@ -37,3 +37,21 @@ Audit events record actor, tenant, action, correlation, time and structured data
 Migration `0005_review_and_exports.sql` adds an optimistic-concurrency revision to assessments and an immutable `assessment_exports` table keyed by tenant, assessment and revision. Existing export rows are copied without changing their IDs, cursor timestamps or archive paths; the legacy table is retained. Feedback, audit and export outbox insertion commit atomically, so a conflicting update cannot leave a partial decision history.
 
 Better Auth maps organizations and members to `tenants` and `tenant_members`, preserving tenant boundaries. Its Drizzle adapter maps ISO date strings to Date values. `auth_sessions`, `auth_accounts`, `auth_verifications`, `auth_invitations` and `auth_rate_limits` are created by migration 0006. Membership IDs remain unique alongside the existing `(tenant_id,user_id)` key. Migration 0007 prevents removal/demotion of the final administrator atomically.
+
+## Enterprise operations
+
+Migrations 0009–0014 add:
+
+- `workspace_objects`: tenant/kind/title/status/priority/owner, versioned validated payload and optimistic revision.
+- `workspace_links`: typed canonical references with reverse indexes; intelligence is not copied into cases.
+- `intelligence_events`: immutable before/after edits, analyst notes, decisions and matching events.
+- `sightings`: tenant/observable/source/time/count/confidence plus original event ID and context.
+- `source_ratings`, `tenant_source_policy`: tenant-specific source trust and inclusion.
+- `workspace_matches`, `requirement_metrics`: background candidates and measured linked support.
+- `workspace_notifications`, `notification_receipts`: workspace alerts and personal read state.
+- `intelligence_changes`: durable commit-triggered change records, dispatched through the existing outbox.
+- `automation_executions`, `entity_tags`: idempotent rule outcomes and scoped tags.
+- `taxii_publications`, `taxii_objects`: atomically promoted tenant collection snapshots and stable pagination.
+- `relationship_assertions`: source/version history separate from the current relationship projection.
+
+Canonical schema additions include CIDR, intrusion-set, course-of-action and report semantics, optional relationship evidence IDs and analyst status. MITRE group records retain existing threat-actor canonical identity and original STIX intrusion-set semantics in source data/export for compatibility. Operational investigations and requirements are internal objects rather than forced STIX SDOs. Reports and eligible referenced intelligence can export appropriate STIX objects.

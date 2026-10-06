@@ -4,7 +4,7 @@ test("analyst can investigate evidence, inspect the graph, filter and export", a
 }) => {
   await page.goto("/");
   await expect(
-    page.getByRole("heading", { name: "Focus on what matters." }),
+    page.getByRole("heading", { name: "Threat operations" }),
   ).toBeVisible();
   await expect(page.getByText("Demonstration workspace.")).toBeVisible();
   await page
@@ -83,7 +83,7 @@ test("source operations, inventory and responsive workspace render", async ({
   await page.getByRole("button", { name: "Toggle navigation" }).click();
   await page.getByRole("link", { name: "Bulk analysis" }).click();
   await expect(
-    page.getByRole("heading", { name: "From indicators to intelligence." }),
+    page.getByRole("heading", { name: "Bulk analysis" }),
   ).toBeVisible();
 });
 

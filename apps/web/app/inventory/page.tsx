@@ -13,6 +13,16 @@ const fields = [
   "operatingSystems",
   "industries",
   "countries",
+  "regions",
+  "brands",
+  "domains",
+  "subsidiaries",
+  "criticalAssets",
+  "software",
+  "identityProviders",
+  "securityProducts",
+  "vips",
+  "exposedServices",
 ] as const;
 type Environment = Record<(typeof fields)[number], string[]>;
 const labels = {
@@ -23,6 +33,16 @@ const labels = {
   operatingSystems: "Operating systems",
   industries: "Industries",
   countries: "Countries",
+  regions: "Regions",
+  brands: "Monitored brands",
+  domains: "Owned domains",
+  subsidiaries: "Subsidiaries",
+  criticalAssets: "Critical assets",
+  software: "Software",
+  identityProviders: "Identity providers",
+  securityProducts: "Security products",
+  vips: "VIPs (workspace private)",
+  exposedServices: "Exposed services",
 };
 export default function Inventory() {
   const canWrite = usePermission("admin");
@@ -32,7 +52,9 @@ export default function Inventory() {
   const [busy, setBusy] = useState(false);
   useEffect(() => {
     if (data)
-      setForm(Object.fromEntries(fields.map((f) => [f, data[f].join(", ")])));
+      setForm(
+        Object.fromEntries(fields.map((f) => [f, (data[f] ?? []).join(", ")])),
+      );
   }, [data]);
   return (
     <>

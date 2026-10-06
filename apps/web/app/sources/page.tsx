@@ -1,4 +1,5 @@
 "use client";
+import Link from "next/link";
 import { usePermission } from "@/lib/access";
 import { Fragment, useState } from "react";
 import { RefreshCw, Database, CheckCircle2 } from "lucide-react";
@@ -196,6 +197,12 @@ export default function Sources() {
                             className="source-detail-panel"
                           >
                             <h3>{s.name} · Source details</h3>
+                            <Link
+                              className="text-link"
+                              href={"/sources/" + s.id}
+                            >
+                              Open source operations →
+                            </Link>
                             <dl className="source-detail-grid">
                               <div>
                                 <dt>Records added</dt>

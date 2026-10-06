@@ -120,7 +120,7 @@ export default function Bulk() {
     <>
       <PageHeader
         eyebrow="BULK ANALYSIS"
-        title="From indicators to intelligence."
+        title="Bulk analysis"
         description="Normalise, deduplicate and assess large batches through the asynchronous pipeline."
       />
       <div className="bulk-grid">

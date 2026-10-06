@@ -1,3 +1,8 @@
+import { deliverIntegration } from "../../packages/enterprise/src/integrations";
+import {
+  processOperation,
+  scheduleOperations,
+} from "../../packages/enterprise/src/automation";
 import type { AppEnv } from "../../apps/api/src/env";
 import { Repository } from "../../packages/database/src/repository";
 import {
@@ -76,6 +81,13 @@ export async function dispatchOutbox(env: AppEnv) {
 export async function processJob(env: AppEnv, job: PipelineJob) {
   const repo = new Repository(env.DB);
   switch (job.stage) {
+    case "operations":
+      if (job.payload.mode === "integration") {
+        await deliverIntegration(env, job);
+        return;
+      }
+      await processOperation(env.DB, job);
+      return;
     case "feed-sync":
       await syncFeed(env, job);
       return;
@@ -242,6 +254,7 @@ export async function consume(batch: MessageBatch<unknown>, env: AppEnv) {
       message.retry({ delaySeconds: Math.min(300, 2 ** message.attempts * 5) });
     }
   }
+  await scheduleOperations(env.DB);
   await dispatchOutbox(env);
   await finalizeFeeds(env);
 }

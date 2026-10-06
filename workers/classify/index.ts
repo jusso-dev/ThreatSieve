@@ -13,7 +13,7 @@ import {
   type DecisionTransport,
 } from "../../packages/clef/src/index";
 import type { AppEnv } from "../../apps/api/src/env";
-import type { SourceReliability } from "../../packages/scoring/src/index";
+import { sourceReliabilities } from "../../packages/enterprise/src/sources";
 import { AppError } from "../../packages/observability/src/index";
 import { z } from "zod";
 import { digest, canonicalJson } from "../../packages/intel/src/normalise";
@@ -36,9 +36,7 @@ export async function classify(
           .data[0]!;
       },
     });
-  const sources = await env.DB.prepare(
-    "SELECT id,independent_group,reliability FROM sources ORDER BY id",
-  ).all<SourceReliability>();
+  const sources = { results: await sourceReliabilities(env.DB, tenantId) };
   bundle.evidenceVersion = await digest(
     canonicalJson({
       evidence: bundle.evidenceVersion,

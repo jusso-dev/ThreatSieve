@@ -58,9 +58,7 @@ test("logout revokes the server session and protects subsequent navigation", asy
 }) => {
   await login(browser, workspace);
   await browser.goto("/");
-  await expect(
-    screen.getByRole("heading", "Focus on what matters."),
-  ).toBeVisible();
+  await expect(screen.getByRole("heading", "Threat operations")).toBeVisible();
   const cookie = (await browser.cookies()).find(
     (c) => c.name === "better-auth.session_token",
   )!;

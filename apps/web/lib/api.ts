@@ -2,6 +2,13 @@
 import { toast } from "sonner";
 import { useEffect, useState, useCallback, useRef } from "react";
 const mutationMessage = (path: string) => {
+  if (/\/notifications\/[^/]+\/read$/.test(path))
+    return "Notification marked as read.";
+  if (/\/tags$/.test(path)) return "Workspace tags updated.";
+  if (/\/notes$/.test(path))
+    return "Analyst entry saved to the decision history.";
+  if (/\/publish$/.test(path)) return "Collection snapshot published to TAXII.";
+  if (path === "v1/sightings") return "Sighting recorded in your workspace.";
   if (path.includes("/saved-views")) return "Saved views updated.";
   if (path.includes("/sync"))
     return "Source sync started. Progress will appear in the source list.";

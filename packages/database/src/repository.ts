@@ -211,19 +211,53 @@ export class Repository {
       )
       .run();
   }
-  async evidence(entityId: string, limit = 100) {
+  async evidence(entityId: string, limit = 100, tenantId?: string) {
     const rows = await this.db
       .prepare(
-        "SELECT data FROM evidence WHERE entity_id=? ORDER BY observed_at DESC,id LIMIT ?",
+        "SELECT data FROM evidence WHERE entity_id=? AND (? IS NULL OR NOT EXISTS(SELECT 1 FROM tenant_source_policy p WHERE p.tenant_id=? AND p.source_id=evidence.source_id AND p.enabled=0)) ORDER BY observed_at DESC,id LIMIT ?",
       )
-      .bind(entityId, limit)
+      .bind(entityId, tenantId ?? null, tenantId ?? null, limit)
       .all<{ data: string }>();
     return rows.results.map((r) => EvidenceSchema.parse(JSON.parse(r.data)));
   }
   async putRelationship(r: IntelRelationship) {
+    const observedFirstSeen = r.firstSeen,
+      observedLastSeen = r.lastSeen;
+    r = {
+      ...r,
+      firstSeen: r.firstSeen ?? r.provenance.publishedAt ?? r.createdAt,
+      lastSeen: r.lastSeen ?? r.provenance.publishedAt ?? r.updatedAt,
+      evidenceIds: r.evidenceIds ?? [],
+      analystStatus:
+        r.analystStatus ??
+        (r.assertionType === "analyst_confirmed" ? "confirmed" : "unreviewed"),
+    };
+    const { digest, canonicalJson } = await import("../../intel/src/normalise");
+    const assertionId = await digest(
+      canonicalJson({
+        ...r,
+        createdAt: undefined,
+        updatedAt: undefined,
+        firstSeen: observedFirstSeen,
+        lastSeen: observedLastSeen,
+        provenance: { ...r.provenance, retrievedAt: undefined },
+      }),
+    );
     await this.db
       .prepare(
-        "INSERT INTO relationships(id,source_entity_id,target_entity_id,relationship_type,assertion_type,confidence,source_id,data,created_at) VALUES(?,?,?,?,?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET data=excluded.data,confidence=excluded.confidence",
+        "INSERT OR IGNORE INTO relationship_assertions VALUES(?,?,?,?,?)",
+      )
+      .bind(
+        assertionId,
+        r.id,
+        r.provenance.sourceId,
+        JSON.stringify(r),
+        r.updatedAt,
+      )
+      .run();
+    await this.db
+      .prepare(
+        "INSERT INTO relationships(id,source_entity_id,target_entity_id,relationship_type,assertion_type,confidence,source_id,data,created_at) VALUES(?,?,?,?,?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET data=excluded.data,confidence=excluded.confidence,source_id=excluded.source_id,source_entity_id=excluded.source_entity_id,target_entity_id=excluded.target_entity_id,relationship_type=excluded.relationship_type,assertion_type=excluded.assertion_type",
       )
       .bind(
         r.id,
@@ -238,7 +272,19 @@ export class Repository {
       )
       .run();
   }
-  async edges(entityId: string, limit = 80, tenantId?: string) {
+  async edges(
+    entityId: string,
+    limit = 80,
+    tenantId?: string,
+    filters: {
+      confidence?: number;
+      source?: string;
+      relationship?: string;
+      from?: string;
+      to?: string;
+      entityType?: string;
+    } = {},
+  ) {
     const r = await this.db
       .prepare(
         `SELECT r.data FROM relationships r
@@ -249,7 +295,10 @@ export class Repository {
            (src.public_intel=1 OR EXISTS(SELECT 1 FROM tenant_observables WHERE tenant_id=? AND observable_id=src.id))
            AND (dst.public_intel=1 OR EXISTS(SELECT 1 FROM tenant_observables WHERE tenant_id=? AND observable_id=dst.id))
            AND COALESCE((SELECT decision FROM relationship_feedback WHERE tenant_id=? AND relationship_id=r.id ORDER BY created_at DESC,id DESC LIMIT 1),'confirm')!='reject'
-         )) ORDER BY r.confidence DESC,r.id LIMIT ?`,
+         )) AND (? IS NULL OR NOT EXISTS(SELECT 1 FROM tenant_source_policy p WHERE p.tenant_id=? AND p.source_id=r.source_id AND p.enabled=0)) AND r.confidence>=? AND (?='' OR r.source_id=?) AND (?='' OR r.relationship_type=?)
+ AND (?='' OR COALESCE(json_extract(r.data,'$.lastSeen'),r.created_at)>=?) AND (?='' OR COALESCE(json_extract(r.data,'$.firstSeen'),r.created_at)<=?)
+ AND (?='' OR (CASE WHEN r.source_entity_id=? THEN dst.type ELSE src.type END)=?)
+ ORDER BY r.confidence DESC,r.id LIMIT ?`,
       )
       .bind(
         entityId,
@@ -258,6 +307,20 @@ export class Repository {
         tenantId ?? null,
         tenantId ?? null,
         tenantId ?? null,
+        tenantId ?? null,
+        tenantId ?? null,
+        filters.confidence ?? 0,
+        filters.source ?? "",
+        filters.source ?? "",
+        filters.relationship ?? "",
+        filters.relationship ?? "",
+        filters.from ?? "",
+        filters.from ?? "",
+        filters.to ?? "",
+        filters.to ?? "",
+        filters.entityType ?? "",
+        entityId,
+        filters.entityType ?? "",
         limit,
       )
       .all<{ data: string }>();
@@ -534,8 +597,9 @@ export class Repository {
     job: PipelineJob,
     gate: { feedbackId?: string; requestKey?: string } = {},
   ) {
-    const queue =
-      job.stage === "feed-sync" || job.stage === "bulk" ? "ingest" : job.stage;
+    const queue = ["feed-sync", "bulk", "operations"].includes(job.stage)
+      ? "ingest"
+      : job.stage;
     return [
       this.db
         .prepare(

@@ -26,3 +26,9 @@ Deploy the connector in infrastructure that can reach your OpenCTI broker and Th
 Analyst feedback produces an immutable export revision with a new cursor, allowing an already-running connector to receive corrected decisions. Redelivering an unchanged revision reuses the same bundle. STIX `modified` advances with the assessment revision. Effective analyst classifications have `assertion_type: analyst_confirmed` and no invented probability; the original classifier result remains explicitly labelled `x_threatsieve_model_classification`. Benign corrections use the custom open-vocabulary indicator type `benign` and the effective classification field. Downstream policies must honor that correction rather than treating the existence of an Indicator as a block instruction. Previously delivered bundles remain historical records; ThreatSieve does not autonomously retract firewall rules.
 
 For the separate private EC2 instance, provisioning, backups and Session Manager access, see [OpenCTI hosting](opencti-hosting.md). The connector dependency is pinned to the deployed platform release; upgrade them together and verify a real STIX bundle import.
+
+## Standalone or OpenCTI front end
+
+ThreatSieve handles collection, prioritisation, evidence-backed assessment and operational analyst intelligence. OpenCTI is an optional broader knowledge graph/system of record. The core workspace does not depend on an OpenCTI deployment.
+
+Set `THREATSIEVE_COLLECTION_IDS` to a comma-separated list of up to 20 explicitly published TAXII collection UUIDs to send additional curated entities, reports and campaign context through the same connector helper. The API key also needs `intel:read`. Collection state advances after all snapshot pages are accepted; failed deliveries retry with stable STIX object identities. Private sightings are deliberately not included without a separate explicit sharing policy. Existing assessment export cursors continue independently.

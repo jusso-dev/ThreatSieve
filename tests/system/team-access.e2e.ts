@@ -65,9 +65,7 @@ test("team invitation travels through signup, verification, acceptance and role 
   await browser.goto(await mailLink(email));
   await expect(screen.getByRole("button", "Accept invitation")).toBeVisible();
   await screen.getByRole("button", "Accept invitation").click();
-  await expect(
-    screen.getByRole("heading", "Focus on what matters."),
-  ).toBeVisible();
+  await expect(screen.getByRole("heading", "Threat operations")).toBeVisible();
   await browser.goto("/team");
   await expect(screen.getByText("Invited analyst (you)")).toBeVisible();
   await expect(screen.getByRole("button", "Send invitation")).not.toBeVisible();

@@ -17,7 +17,7 @@ export async function buildEvidenceBundle(
     throw new AppError("NOT_FOUND", 404, "Observable not found");
   const observable = await repo.observable(observableId);
   if (!observable) throw new AppError("NOT_FOUND", 404, "Observable not found");
-  const evidence = await repo.evidence(observableId, 101);
+  const evidence = await repo.evidence(observableId, 101, tenantId);
   let truncated = evidence.length > 100;
   evidence.splice(100);
   const customer = await repo.db

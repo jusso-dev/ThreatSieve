@@ -1,4 +1,6 @@
 "use client";
+import { Notifications } from "./intelligence-notifications";
+import { CommandPalette } from "./command-palette";
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 import { useState, useEffect, useRef } from "react";
@@ -19,6 +21,13 @@ import {
   Users,
   Crosshair,
   BookOpen,
+  ListChecks,
+  FolderSearch,
+  Eye,
+  Layers,
+  FileText,
+  Workflow,
+  ScanEye,
 } from "lucide-react";
 import { AccessContext } from "@/lib/access";
 import { authClient, authResult } from "@/lib/auth";
@@ -27,6 +36,17 @@ import { Button } from "./ui/button";
 const navigation = [
   { name: "Threat operations", href: "/", icon: Radar },
   { name: "Intelligence library", href: "/intelligence", icon: BookOpen },
+  {
+    name: "Intelligence requirements",
+    href: "/requirements",
+    icon: ListChecks,
+  },
+  { name: "Investigations", href: "/cases", icon: FolderSearch },
+  { name: "Watchlists", href: "/watchlists", icon: Eye },
+  { name: "Collections", href: "/collections", icon: Layers },
+  { name: "Reports", href: "/reports", icon: FileText },
+  { name: "Sightings", href: "/sightings", icon: ScanEye },
+  { name: "Automation", href: "/automations", icon: Workflow },
   { name: "Threat clusters", href: "/clusters", icon: Network },
   { name: "Intelligence sources", href: "/sources", icon: Database },
   { name: "Bulk analysis", href: "/bulk", icon: Upload },
@@ -42,6 +62,7 @@ function WorkspaceShell({ children }: { children: React.ReactNode }) {
   const path = usePathname();
   const router = useRouter();
   const [query, setQuery] = useState("");
+  const [palette, setPalette] = useState(false);
   const [results, setResults] = useState<
     { id: string; name: string; type: string }[]
   >([]);
@@ -64,7 +85,7 @@ function WorkspaceShell({ children }: { children: React.ReactNode }) {
     const handler = (e: KeyboardEvent) => {
       if ((e.metaKey || e.ctrlKey) && e.key === "k") {
         e.preventDefault();
-        input.current?.focus();
+        setPalette(true);
       }
     };
     window.addEventListener("keydown", handler);
@@ -185,6 +206,11 @@ function WorkspaceShell({ children }: { children: React.ReactNode }) {
   };
   return (
     <div className="app-shell">
+      {palette && (
+        <AccessContext value={me.data?.scopes ?? []}>
+          <CommandPalette onClose={() => setPalette(false)} />
+        </AccessContext>
+      )}
       {open && (
         <button
           className="nav-backdrop"
@@ -233,6 +259,7 @@ function WorkspaceShell({ children }: { children: React.ReactNode }) {
               onClick={() => setOpen(false)}
               aria-current={
                 path === item.href ||
+                (item.href !== "/" && path.startsWith(item.href + "/")) ||
                 (item.href === "/intelligence" &&
                   path.startsWith("/intelligence/"))
                   ? "page"
@@ -241,6 +268,7 @@ function WorkspaceShell({ children }: { children: React.ReactNode }) {
               className={
                 "nav-link " +
                 (path === item.href ||
+                (item.href !== "/" && path.startsWith(item.href + "/")) ||
                 (item.href === "/" && path.startsWith("/investigations")) ||
                 (item.href === "/intelligence" &&
                   path.startsWith("/intelligence/"))
@@ -303,8 +331,11 @@ function WorkspaceShell({ children }: { children: React.ReactNode }) {
                 ? "Investigation"
                 : path.startsWith("/intelligence")
                   ? "Intelligence library"
-                  : (navigation.find((n) => n.href === path)?.name ??
-                    "Threat operations")}
+                  : (navigation.find(
+                      (n) =>
+                        n.href === path ||
+                        (n.href !== "/" && path.startsWith(n.href + "/")),
+                    )?.name ?? "Threat operations")}
             </strong>
           </div>
           <div className="global-search">
@@ -350,9 +381,13 @@ function WorkspaceShell({ children }: { children: React.ReactNode }) {
                 }
               }}
             />
-            <kbd>
-              <Command size={11} /> K
-            </kbd>
+            <button
+              className="command-trigger"
+              aria-label="Open command palette"
+              onClick={() => setPalette(true)}
+            >
+              <Command size={12} /> K
+            </button>
             {query.length >= 2 && (
               <div className="search-results" id="global-search-results">
                 <span className="sr-only" role="status">
@@ -408,6 +443,7 @@ function WorkspaceShell({ children }: { children: React.ReactNode }) {
                 ? "Connecting…"
                 : "Workspace connected"}
           </span>
+          <Notifications />
         </header>
         <main id="main-content">
           <AccessContext value={me.data?.scopes ?? []}>

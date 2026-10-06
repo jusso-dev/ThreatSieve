@@ -31,6 +31,7 @@ export function detectType(input: string): ObservableType {
   if (/^https?:\/\//i.test(value)) return "url";
   if (/^CVE-\d{4}-\d{4,}$/i.test(value)) return "cve";
   if (/^AS\d+$/i.test(value)) return "asn";
+  if (ipaddr.isValidCIDR(value)) return "cidr";
   if (ipaddr.isValid(value))
     return ipaddr.parse(value).kind() === "ipv4" ? "ipv4" : "ipv6";
   if (/^[a-f\d]{64}$/i.test(value)) return "sha256";
@@ -72,6 +73,16 @@ export function normalizeValue(input: string, type: ObservableType): string {
   )
     value = value.replace(new RegExp("^" + type + ":", "i"), "");
   switch (type) {
+    case "cidr": {
+      if (!ipaddr.isValidCIDR(value) || value.includes("%"))
+        throw new Error("Invalid CIDR");
+      const [address, prefix] = ipaddr.parseCIDR(value);
+      const bytes = address.toByteArray().map((byte, i) => {
+        const bits = Math.max(0, Math.min(8, prefix - i * 8));
+        return byte & (bits === 0 ? 0 : 255 << (8 - bits));
+      });
+      return ipaddr.fromByteArray(bytes).toString() + "/" + prefix;
+    }
     case "ipv4":
       if (
         !/^(\d{1,3}\.){3}\d{1,3}$/.test(value) ||

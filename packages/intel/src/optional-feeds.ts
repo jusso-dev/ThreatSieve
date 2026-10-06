@@ -38,12 +38,30 @@ export class OptionalFeed extends PublicFeed {
   override async fetch(cursor?: string): Promise<FeedBatch> {
     if (!this.config.enabled) throw new Error("Feed disabled");
     let url: URL;
+    const started = new Date().toISOString();
+    const resume = cursor?.startsWith("{")
+      ? z
+          .object({
+            from: z.iso.datetime().optional(),
+            next: z.string().max(2000),
+            checkpoint: z.iso.datetime(),
+          })
+          .parse(JSON.parse(cursor))
+      : null;
     const headers: Record<string, string> = { Accept: "application/json" };
     if (this.id === "otx") {
       if (!this.config.apiKey) throw new Error("OTX credential required");
       url = new URL("https://otx.alienvault.com/api/v1/pulses/subscribed");
-      if (cursor)
-        url.searchParams.set("modified_since", z.iso.datetime().parse(cursor));
+      if (resume?.from || (cursor && !resume))
+        url.searchParams.set(
+          "modified_since",
+          z.iso.datetime().parse(resume?.from ?? cursor),
+        );
+      if (resume)
+        url.searchParams.set(
+          "page",
+          z.coerce.number().int().positive().parse(resume.next).toString(),
+        );
       url.searchParams.set("limit", "100");
       headers["X-OTX-API-KEY"] = this.config.apiKey;
     } else if (this.id === "virustotal") {
@@ -95,8 +113,12 @@ export class OptionalFeed extends PublicFeed {
         );
       if (this.id === "taxii") {
         headers.Accept = "application/taxii+json;version=2.1";
-        if (cursor)
-          url.searchParams.set("added_after", z.iso.datetime().parse(cursor));
+        if (resume?.from || (cursor && !resume))
+          url.searchParams.set(
+            "added_after",
+            z.iso.datetime().parse(resume?.from ?? cursor),
+          );
+        if (resume) url.searchParams.set("next", resume.next);
         url.searchParams.set("limit", "100");
       }
       if (this.config.apiKey)
@@ -136,13 +158,110 @@ export class OptionalFeed extends PublicFeed {
       else if (this.id === "misp-feed") {
         const body = z
           .object({
-            Event: z.object({ Attribute: z.array(z.unknown()).optional() }),
+            Event: z
+              .object({
+                uuid: z.string().optional(),
+                info: z.string().optional(),
+                timestamp: z.string().optional(),
+                Tag: z.array(z.object({ name: z.string() })).default([]),
+                Galaxy: z.array(z.unknown()).default([]),
+                Attribute: z
+                  .array(z.record(z.string(), z.unknown()))
+                  .default([]),
+                Object: z
+                  .array(
+                    z.object({
+                      uuid: z.string(),
+                      name: z.string(),
+                      Attribute: z
+                        .array(z.record(z.string(), z.unknown()))
+                        .default([]),
+                    }),
+                  )
+                  .default([]),
+              })
+              .passthrough(),
           })
           .parse(raw);
-        records = body.Event.Attribute ?? [];
+        const e = body.Event;
+        records = [
+          ...e.Attribute,
+          ...e.Object.flatMap((o) =>
+            o.Attribute.map((a) => ({
+              ...a,
+              objectUuid: o.uuid,
+              objectName: o.name,
+            })),
+          ),
+        ].map((a) => ({
+          ...a,
+          eventUuid: e.uuid,
+          eventInfo: e.info,
+          eventTags: e.Tag.map((t) => t.name),
+          eventGalaxies: e.Galaxy,
+        }));
       } else records = [{ raw, observable: cursor }];
     }
-    return { raw, records, cursor: new Date().toISOString() };
+    if (this.id === "taxii") {
+      const page = z
+        .object({
+          more: z.boolean().default(false),
+          next: z.string().max(2000).optional(),
+        })
+        .parse(raw);
+      const checkpoint = z.iso
+        .datetime()
+        .parse(
+          response.headers.get("X-TAXII-Date-Added-Last") ??
+            resume?.checkpoint ??
+            (cursor && !resume ? cursor : started),
+        );
+      if (page.more && !page.next)
+        throw new Error("TAXII pagination requires a next token");
+      if (page.more && page.next === resume?.next)
+        throw new Error("TAXII returned a repeated next token");
+      return {
+        raw,
+        records,
+        more: page.more,
+        cursor: page.more
+          ? JSON.stringify({
+              from: resume?.from ?? (cursor && !resume ? cursor : undefined),
+              next: page.next,
+              checkpoint,
+            })
+          : new Date(Date.parse(checkpoint) - 1).toISOString(),
+      };
+    }
+    if (this.id === "otx") {
+      const page = z
+        .object({ next: z.string().nullable().optional() })
+        .parse(raw);
+      if (page.next) {
+        const next = new URL(page.next);
+        if (next.origin !== url.origin || next.pathname !== url.pathname)
+          throw new Error("Unexpected OTX pagination endpoint");
+        const number = z.coerce
+          .number()
+          .int()
+          .positive()
+          .parse(next.searchParams.get("page"));
+        if (String(number) === resume?.next)
+          throw new Error("Repeated OTX page");
+        return {
+          raw,
+          records,
+          more: true,
+          cursor: JSON.stringify({
+            from: resume?.from ?? (cursor && !resume ? cursor : undefined),
+            next: String(number),
+            checkpoint: resume?.checkpoint ?? started,
+          }),
+        };
+      }
+      return { raw, records, cursor: resume?.checkpoint ?? started };
+    }
+    return { raw, records, cursor: started };
   }
   override async normalize(input: unknown): Promise<NormalizedIntelRecord[]> {
     const provenance = providerProvenance(this.id, this.name);
@@ -276,30 +395,70 @@ export class OptionalFeed extends PublicFeed {
           type: z.string(),
           comment: z.string().optional(),
           to_ids: z.boolean().optional(),
+          timestamp: z.string().optional(),
+          eventUuid: z.string().optional(),
+          eventInfo: z.string().optional(),
+          eventTags: z.array(z.string()).default([]),
+          Tag: z.array(z.object({ name: z.string() })).default([]),
         })
+        .passthrough()
         .parse(input);
-      if (
-        ![
-          "ip-src",
-          "ip-dst",
-          "domain",
-          "hostname",
-          "url",
-          "md5",
-          "sha1",
-          "sha256",
-          "email-src",
-          "email-dst",
-        ].includes(item.type)
-      )
-        return [];
-      return [
-        await make(
-          item.value,
-          { description: item.comment ?? "", to_ids: item.to_ids },
-          item.uuid,
-        ),
-      ];
+      const parts = item.type.includes("|")
+        ? item.type.split("|")
+        : [item.type];
+      const values = item.type.includes("|")
+        ? item.value.split("|")
+        : [item.value];
+      const supported: Record<string, string> = {
+        "ip-src": "ipv4",
+        "ip-dst": "ipv4",
+        domain: "domain",
+        hostname: "hostname",
+        url: "url",
+        md5: "md5",
+        sha1: "sha1",
+        sha256: "sha256",
+        "email-src": "email",
+        "email-dst": "email",
+        mutex: "mutex",
+        regkey: "registry-key",
+        ja3: "ja3",
+        ja4: "ja4",
+        AS: "asn",
+        "x509-fingerprint-sha256": "certificate",
+      };
+      const records: NormalizedIntelRecord[] = [];
+      for (const [index, part] of parts.entries()) {
+        if (!supported[part] || !values[index]) continue;
+        const value = values[index]!;
+        const type = (
+          part.startsWith("ip-")
+            ? value.includes(":")
+              ? "ipv6"
+              : "ipv4"
+            : supported[part]
+        ) as import("../../schemas/src/index").ObservableType;
+        await normalise(value, type);
+        const record = await make(
+          value,
+          {
+            description: item.comment ?? item.eventInfo ?? "",
+            to_ids: item.to_ids,
+            mispUuid: item.uuid,
+            eventUuid: item.eventUuid,
+            tags: [...item.eventTags, ...item.Tag.map((t) => t.name)],
+            misp: item,
+          },
+          item.uuid + ":" + part,
+        );
+        record.observable = { value, type };
+        if (item.timestamp && /^\d+$/.test(item.timestamp))
+          record.evidence[0]!.observedAt = new Date(
+            Number(item.timestamp) * 1000,
+          ).toISOString();
+        records.push(record);
+      }
+      return records;
     }
     const item = z
       .object({ observable: z.object({ observable: z.string() }) })

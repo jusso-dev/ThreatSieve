@@ -4,6 +4,7 @@ export const Probability = z.number().min(0).max(1);
 export const ObservableType = z.enum([
   "ipv4",
   "ipv6",
+  "cidr",
   "domain",
   "hostname",
   "url",
@@ -60,6 +61,9 @@ export const EntityType = z.enum([
   "sector",
   "country",
   "security-product",
+  "intrusion-set",
+  "course-of-action",
+  "report",
   "cluster",
 ]);
 export type EntityType = z.infer<typeof EntityType>;
@@ -84,7 +88,9 @@ export const RelationshipSchema = z.object({
   id: z.string(),
   sourceEntityId: z.string(),
   targetEntityId: z.string(),
-  relationshipType: z.string(),
+  relationshipType: z.string().min(1).max(100),
+  evidenceIds: z.array(z.string()).max(100).optional(),
+  analystStatus: z.enum(["unreviewed", "confirmed", "rejected"]).optional(),
   assertionType: Assertion,
   confidence: Probability,
   sourceIds: z.array(z.string()).min(1),
@@ -144,6 +150,7 @@ export const RecordSchema = z
   );
 export type NormalizedIntelRecord = z.infer<typeof RecordSchema>;
 export const Stage = z.enum([
+  "operations",
   "ingest",
   "normalise",
   "enrich",
@@ -183,6 +190,16 @@ export const EnvironmentSchema = z.object({
   operatingSystems: z.array(z.string()).max(50).default([]),
   industries: z.array(z.string()).max(50).default([]),
   countries: z.array(z.string()).max(100).default([]),
+  regions: z.array(z.string().max(200)).max(100).default([]),
+  brands: z.array(z.string().max(200)).max(100).default([]),
+  domains: z.array(z.string().max(200)).max(100).default([]),
+  subsidiaries: z.array(z.string().max(200)).max(100).default([]),
+  criticalAssets: z.array(z.string().max(200)).max(100).default([]),
+  software: z.array(z.string().max(200)).max(100).default([]),
+  identityProviders: z.array(z.string().max(200)).max(100).default([]),
+  securityProducts: z.array(z.string().max(200)).max(100).default([]),
+  vips: z.array(z.string().max(200)).max(100).default([]),
+  exposedServices: z.array(z.string().max(200)).max(100).default([]),
 });
 export type CustomerEnvironment = z.infer<typeof EnvironmentSchema>;
 export interface EvidenceBundle {
@@ -380,6 +397,7 @@ export interface FeedHealth {
   checkedAt: string;
 }
 export interface FeedBatch {
+  more?: boolean;
   records: unknown[];
   cursor: string;
   raw: unknown;

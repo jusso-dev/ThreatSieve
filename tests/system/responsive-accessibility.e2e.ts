@@ -69,16 +69,14 @@ test("mobile navigation traps focus, closes on Escape and supports page navigati
   await expect(trigger).toBeFocused();
   await trigger.click();
   await screen.getByRole("link", "Bulk analysis").click();
-  await expect(
-    screen.getByRole("heading", "From indicators to intelligence."),
-  ).toBeVisible();
+  await expect(screen.getByRole("heading", "Bulk analysis")).toBeVisible();
   await expect(
     screen.getByRole("dialog", "Workspace navigation"),
   ).not.toBeVisible();
 });
 for (const [path, heading] of [
-  ["/", "Focus on what matters."],
-  ["/bulk", "From indicators to intelligence."],
+  ["/", "Threat operations"],
+  ["/bulk", "Bulk analysis"],
   ["/inventory", "Your environment"],
   ["/sources", "Intelligence sources"],
   ["/clusters", "Emerging clusters"],

@@ -1,0 +1,9 @@
+import { WorkspaceDetail } from "@/components/workspace-objects";
+export default async function Page({
+  params,
+}: {
+  params: Promise<{ id: string }>;
+}) {
+  const { id } = await params;
+  return <WorkspaceDetail kind="collection" id={id} />;
+}

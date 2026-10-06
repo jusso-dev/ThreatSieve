@@ -1,3 +1,5 @@
+import { scheduleOperations } from "../../../packages/enterprise/src/automation";
+import { enterpriseRoutes } from "./enterprise";
 import {
   createAuth,
   authenticateSession,
@@ -790,6 +792,16 @@ app.get("/v1/graph/:id", scope("intel:read"), async (c) => {
     .min(1)
     .max(3)
     .parse(c.req.query("depth") ?? 2);
+  const filters = z
+    .object({
+      confidence: z.coerce.number().min(0).max(1).default(0),
+      source: z.string().max(200).optional(),
+      relationship: z.string().max(100).optional(),
+      from: z.iso.datetime().optional(),
+      to: z.iso.datetime().optional(),
+      entityType: z.string().max(100).optional(),
+    })
+    .parse(c.req.query());
   const repo = new Repository(c.env.DB);
   if (!(await repo.visible(c.get("principal").tenantId, c.req.param("id")!)))
     throw new AppError("NOT_FOUND", 404, "Entity not found");
@@ -802,7 +814,12 @@ app.get("/v1/graph/:id", scope("intel:read"), async (c) => {
   for (let i = 0; i < depth; i++) {
     const next: string[] = [];
     for (const id of frontier) {
-      const adjacent = await repo.edges(id, 31, c.get("principal").tenantId);
+      const adjacent = await repo.edges(
+        id,
+        31,
+        c.get("principal").tenantId,
+        filters,
+      );
       if (adjacent.length > 30) truncated = true;
       for (const edge of adjacent.slice(0, 30)) {
         if (nodes.size >= 100 || edges.size >= 200) {
@@ -826,7 +843,13 @@ app.get("/v1/graph/:id", scope("intel:read"), async (c) => {
     }
     frontier = next;
   }
+  const sightings = await c.env.DB.prepare(
+    "SELECT DISTINCT observable_id FROM sightings WHERE tenant_id=? AND observable_id IN (SELECT value FROM json_each(?))",
+  )
+    .bind(c.get("principal").tenantId, JSON.stringify([...nodes.keys()]))
+    .all<{ observable_id: string }>();
   return c.json({
+    sightedEntityIds: sightings.results.map((r) => r.observable_id),
     nodes: [...nodes.values()],
     edges: [...edges.values()],
     truncated,
@@ -860,16 +883,22 @@ app.get("/v1/feeds", scope("feeds:read"), async (c) => {
   const rows = await c.env.DB.prepare(
     "SELECT * FROM sources WHERE id NOT IN ('customer','analyst','upload','demo') ORDER BY id",
   ).all<{ id: string; enabled: number; status: string }>();
-  const data = rows.results.map((source) => {
-    const missing =
-      (source.id === "threatfox" && !c.env.THREATFOX_AUTH_KEY) ||
-      (source.id === "urlhaus" && !c.env.URLHAUS_AUTH_KEY);
-    return {
-      ...source,
-      enabled: missing ? 0 : source.enabled,
-      status: missing || !source.enabled ? "disabled" : source.status,
-    };
-  });
+  const data = await Promise.all(
+    rows.results.map(async (source) => {
+      let enabled = false;
+      try {
+        enabled =
+          (await getFeed(c.env, source.id).healthCheck()).status !== "disabled";
+      } catch {
+        /* Enrichment-only adapters do not provide bulk feeds. */
+      }
+      return {
+        ...source,
+        enabled: enabled ? 1 : 0,
+        status: enabled ? source.status : "disabled",
+      };
+    }),
+  );
   return c.json({ data });
 });
 app.get("/v1/feeds/:id/health", scope("feeds:read"), async (c) => {
@@ -1162,6 +1191,7 @@ app.get("/v1/ops", scope("admin"), async (c) => {
     .all();
   return c.json({ jobs: jobs.results, usage: usage.results });
 });
+app.route("/v1", enterpriseRoutes);
 app.notFound((c) =>
   c.json(
     {
@@ -1186,7 +1216,7 @@ export default {
       (async () => {
         if (event.cron === "17 */6 * * *") {
           const sources = await env.DB.prepare(
-            "SELECT id FROM sources WHERE enabled=1 AND id IN ('mitre','threatfox','misp','urlhaus','feodo','cisa-kev')",
+            "SELECT id FROM sources WHERE enabled=1 AND id IN ('mitre','threatfox','misp','urlhaus','feodo','cisa-kev','taxii','stix','misp-feed','otx')",
           ).all<{ id: string }>();
           for (const source of sources.results) {
             if (
@@ -1197,6 +1227,7 @@ export default {
             await queueFeedSync(env, source.id);
           }
         }
+        await scheduleOperations(env.DB);
         await dispatchOutbox(env);
         await finalizeFeeds(env);
         await env.DB.prepare("DELETE FROM rate_limits WHERE expires_at<?")

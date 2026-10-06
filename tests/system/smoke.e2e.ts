@@ -5,9 +5,7 @@ test("isolated workspace opens and API agrees with the UI", async ({
   workspace,
 }) => {
   await browser.goto("/");
-  await expect(
-    screen.getByRole("heading", "Focus on what matters."),
-  ).toBeVisible();
+  await expect(screen.getByRole("heading", "Threat operations")).toBeVisible();
   const response = await request(workspace, "/v1/assessments");
   expect(response.status).toBe(200);
   await screen.getByRole("button", "All intelligence").click();

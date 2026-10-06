@@ -34,9 +34,7 @@ test("library filters, alias search and entity pivots use persisted intelligence
     .getByRole("link", "Intelligence library", { exact: true })
     .last()
     .click();
-  await expect(
-    screen.getByRole("heading", "Explore the intelligence."),
-  ).toBeVisible();
+  await expect(screen.getByRole("heading", "Threat library")).toBeVisible();
 });
 test("triage filters survive reload and sort across all server results", async ({
   browser,
@@ -263,15 +261,15 @@ test("workbench desktop and mobile screenshots document live synthetic workflows
   app,
 }) => {
   for (const [path, heading, image] of [
-    ["/", "Focus on what matters.", "operations"],
-    ["/intelligence", "Explore the intelligence.", "intelligence-library"],
+    ["/", "Threat operations", "operations"],
+    ["/intelligence", "Threat library", "intelligence-library"],
     [
       "/investigations/" + beacon(workspace).assessment_id,
       "beacon.demo.example",
       "investigation",
     ],
     ["/sources", "Intelligence sources", "sources"],
-    ["/bulk", "From indicators to intelligence.", "bulk"],
+    ["/bulk", "Bulk analysis", "bulk"],
     ["/clusters", "Emerging clusters", "clusters"],
     ["/inventory", "Your environment", "inventory"],
   ]) {

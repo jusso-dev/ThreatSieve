@@ -1,3 +1,4 @@
+import { OptionalFeed } from "../../packages/intel/src/optional-feeds";
 import type { AppEnv } from "../../apps/api/src/env";
 import { Repository } from "../../packages/database/src/repository";
 import { AdditionalFeed } from "../../packages/intel/src/additional-feeds";
@@ -16,6 +17,30 @@ export function getFeed(env: AppEnv, id: string) {
     feodo: "Feodo Tracker",
     "cisa-kev": "CISA KEV",
   };
+  if (id === "taxii" || id === "stix" || id === "misp-feed") {
+    const prefix = id === "misp-feed" ? "MISP_FEED" : id.toUpperCase();
+    const config = env as unknown as Record<string, string | undefined>;
+    return new OptionalFeed(
+      id,
+      id === "taxii"
+        ? "TAXII 2.1"
+        : id === "stix"
+          ? "STIX 2.1 feed"
+          : "MISP feed",
+      new Repository(env.DB),
+      {
+        enabled: config[prefix + "_ENABLED"] === "true",
+        endpoint: config[prefix + "_ENDPOINT"],
+        allowedHost: config[prefix + "_ALLOWED_HOST"],
+        apiKey: config[prefix + "_API_KEY"],
+      },
+    );
+  }
+  if (id === "otx")
+    return new OptionalFeed("otx", "LevelBlue OTX", new Repository(env.DB), {
+      enabled: env.OTX_ENABLED === "true" && !!env.OTX_API_KEY,
+      apiKey: env.OTX_API_KEY,
+    });
   if (!names[id]) throw new Error("Feed unavailable");
   const Provider = ["mitre", "threatfox"].includes(id)
     ? PublicFeed
@@ -65,7 +90,12 @@ export async function syncFeed(env: AppEnv, job: PipelineJob) {
     };
     await repo.finish(
       job,
-      { rawKey, records: batch.records.length, checkpoint: batch.cursor },
+      {
+        rawKey,
+        records: batch.records.length,
+        checkpoint: batch.cursor,
+        more: batch.more ?? false,
+      },
       fanout,
     );
     await env.DB.prepare(
@@ -249,6 +279,7 @@ export async function finalizeFeeds(env: AppEnv) {
     const result = z
       .object({
         checkpoint: z.string(),
+        more: z.boolean().optional(),
         records: z.number(),
         rawKey: z.string(),
       })
@@ -283,6 +314,7 @@ export async function finalizeFeeds(env: AppEnv) {
         job.jobId,
       ),
     ]);
+    if (result.more) await queueFeedSync(env, job.entityId);
   }
 }
 

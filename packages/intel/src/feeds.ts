@@ -83,6 +83,8 @@ const STIX_TYPES: Record<string, IntelEntity["type"]> = {
   tool: "tool",
   campaign: "campaign",
   infrastructure: "infrastructure",
+  "course-of-action": "course-of-action",
+  report: "report",
   vulnerability: "vulnerability",
 };
 export async function stixRecord(
@@ -115,12 +117,60 @@ export async function stixRecord(
     records.push({ provenance: p, relationships: [rel], evidence: [] });
     return records;
   }
-  const SCO_TYPES:Record<string,"domain"|"ipv4"|"ipv6"|"url"|"email">={"domain-name":"domain","ipv4-addr":"ipv4","ipv6-addr":"ipv6",url:"url","email-addr":"email"};
-  if(SCO_TYPES[o.type]&&typeof o.value==='string')return [{observable:{value:o.value,type:SCO_TYPES[o.type]},provenance:p,relationships:[],evidence:[]}];
-  if(o.type==='indicator'&&typeof o.pattern==='string'){
-    const match=/^\[(domain-name:value|ipv4-addr:value|ipv6-addr:value|url:value|email-addr:value|file:hashes\.'(?:MD5|SHA-1|SHA-256)') = '((?:[^'\\]|\\.)*)'\]$/.exec(o.pattern);
-    if(!match)throw new Error('Unsupported compound STIX indicator pattern');
-    return [{observable:{value:match[2]!.replace(/\\(['\\])/g,'$1')},provenance:p,relationships:[],evidence:[{id:'ev_'+await digest(p.sourceId+':'+o.id),type:'feed',sourceId:p.sourceId,provenance:p,data:{description:o.description??'',stix:o,sourceClaim:'STIX indicator'},confidence:0.6,createdAt:new Date().toISOString(),behavioural:false}]}];
+  const SCO_TYPES: Record<
+    string,
+    "domain" | "ipv4" | "ipv6" | "url" | "email"
+  > = {
+    "domain-name": "domain",
+    "ipv4-addr": "ipv4",
+    "ipv6-addr": "ipv6",
+    url: "url",
+    "email-addr": "email",
+  };
+  if (SCO_TYPES[o.type] && typeof o.value === "string")
+    return [
+      {
+        observable: {
+          value: o.value,
+          type:
+            o.value.includes("/") && ["ipv4-addr", "ipv6-addr"].includes(o.type)
+              ? "cidr"
+              : SCO_TYPES[o.type],
+        },
+        provenance: p,
+        relationships: [],
+        evidence: [],
+      },
+    ];
+  if (o.type === "indicator" && typeof o.pattern === "string") {
+    const match =
+      /^\[(domain-name:value|ipv4-addr:value|ipv6-addr:value|url:value|email-addr:value|file:hashes\.'(?:MD5|SHA-1|SHA-256)') = '((?:[^'\\]|\\.)*)'\]$/.exec(
+        o.pattern,
+      );
+    if (!match) throw new Error("Unsupported compound STIX indicator pattern");
+    return [
+      {
+        observable: { value: match[2]!.replace(/\\(['\\])/g, "$1") },
+        provenance: p,
+        relationships: [],
+        evidence: [
+          {
+            id: "ev_" + (await digest(p.sourceId + ":" + o.id)),
+            type: "feed",
+            sourceId: p.sourceId,
+            provenance: p,
+            data: {
+              description: o.description ?? "",
+              stix: o,
+              sourceClaim: "STIX indicator",
+            },
+            confidence: 0.6,
+            createdAt: new Date().toISOString(),
+            behavioural: false,
+          },
+        ],
+      },
+    ];
   }
   const type = STIX_TYPES[o.type];
   if (!type || !o.name) return [];
@@ -140,7 +190,32 @@ export async function stixRecord(
     },
     provenance: p,
     relationships: [],
-    evidence: [],
+    evidence: [
+      {
+        id:
+          "ev_" +
+          (await digest(
+            p.sourceId + ":" + o.id + ":" + (o.modified ?? o.created ?? ""),
+          )),
+        type: p.sourceId === "mitre" ? "attack" : "feed",
+        sourceId: p.sourceId,
+        provenance: p,
+        data: {
+          description: o.description ?? o.name,
+          stixType: o.type,
+          externalId,
+          aliases: o.aliases ?? o.x_mitre_aliases ?? [],
+          knowledgeOnly: true,
+        },
+        confidence:
+          typeof o.confidence === "number"
+            ? Math.max(0, Math.min(1, o.confidence / 100))
+            : 0.8,
+        createdAt: new Date().toISOString(),
+        observedAt: o.modified ?? o.created,
+        behavioural: false,
+      },
+    ],
   });
   return records;
 }
@@ -165,6 +240,19 @@ export interface FeedSecrets {
   OTX_API_KEY?: string;
   VIRUSTOTAL_API_KEY?: string;
   GREYNOISE_API_KEY?: string;
+  TAXII_ENABLED?: string;
+  TAXII_ENDPOINT?: string;
+  TAXII_ALLOWED_HOST?: string;
+  TAXII_API_KEY?: string;
+  STIX_ENABLED?: string;
+  STIX_ENDPOINT?: string;
+  STIX_ALLOWED_HOST?: string;
+  STIX_API_KEY?: string;
+  MISP_FEED_ENABLED?: string;
+  MISP_FEED_ENDPOINT?: string;
+  MISP_FEED_ALLOWED_HOST?: string;
+  MISP_FEED_API_KEY?: string;
+  OTX_ENABLED?: string;
 }
 export class PublicFeed implements ThreatFeedProvider {
   readonly type = "json" as const;
