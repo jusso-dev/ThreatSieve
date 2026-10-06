@@ -1315,8 +1315,11 @@ h1 {
 }
 .bulk-grid {
   display: grid;
-  grid-template-columns: 1.3fr 1fr;
+  grid-template-columns: minmax(0, 1.3fr) minmax(0, 1fr);
   gap: 24px;
+}
+.bulk-grid > * {
+  min-width: 0;
 }
 .bulk-textarea {
   width: 100%;
@@ -1338,6 +1341,9 @@ h1 {
   background: #fafcf9;
   color: #819888;
   padding: 20px;
+  min-width: 0;
+  text-align: center;
+  overflow-wrap: anywhere;
 }
 .upload-zone strong {
   color: #58725f;
@@ -1345,6 +1351,8 @@ h1 {
   font-weight: 500;
 }
 .upload-zone input {
+  width: 100%;
+  min-width: 0;
   max-width: 100%;
   border: 0;
   font-size: 11px;
@@ -1584,7 +1592,7 @@ h1 {
     grid-template-columns: 1fr 1fr;
   }
   .bulk-grid {
-    grid-template-columns: 1fr;
+    grid-template-columns: minmax(0, 1fr);
   }
   .decision-layout {
     gap: 20px;

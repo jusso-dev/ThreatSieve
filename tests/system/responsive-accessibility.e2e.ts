@@ -95,5 +95,19 @@ for (const [path, heading] of [
         () => document.documentElement.scrollWidth <= window.innerWidth,
       ),
     ).toBe(true);
+    if (path === "/bulk") {
+      // Native file inputs have different intrinsic widths on Linux/macOS.
+      // The grid must shrink safely, including before a web font is available.
+      await browser.setViewport({ width: 320, height: 740 });
+      await browser.evaluate(() => {
+        document.body.style.fontFamily = "Arial, sans-serif";
+        return null;
+      });
+      const size = await browser.evaluate(() => ({
+        document: document.documentElement.scrollWidth,
+        viewport: window.innerWidth,
+      }));
+      expect(size.document).toBeLessThanOrEqual(size.viewport);
+    }
   });
 }
