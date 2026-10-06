@@ -34,7 +34,7 @@ async function main() {
       "wrangler",
       "d1",
       "execute",
-      "threatsieve",
+      "DB",
       "--config",
       config,
       remote ? "--remote" : "--local",

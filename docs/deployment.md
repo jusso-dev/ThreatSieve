@@ -56,3 +56,22 @@ Next.js 16 deploys via the OpenNext Cloudflare adapter. Web sessions are proxied
 Verify `/health` and `/ready`; provision two distinct tenants; prove private telemetry is inaccessible across them; sync MITRE then MISP then required indicator feeds; classify a known source-backed indicator through real Clef; verify full raw distributions and escalation; confirm/reject from the browser; download STIX; receive a bundle in OpenCTI. Test queues, DLQ replay and failure recovery in the target account. Local unit tests do not substitute for these acceptance checks.
 
 Set edge rate/body limits, log retention, alerting, billing alerts, and provider polling schedules appropriate to your plan. Load-test expected feed sizes and AI budgets. Keep Vectorize disabled until the index is populated; graph candidate retrieval continues independently.
+
+## Cloudflare production verification
+
+The hosted workspace is [ThreatSieve](https://threatsieve-web-production.yuma-it.workers.dev), with the [API health endpoint](https://threatsieve-api-production.yuma-it.workers.dev/health). Authentication is required for intelligence endpoints. Production has no synthetic demo seed.
+
+The web Worker calls the API using its `THREATSIEVE_API` HTTP service binding. The release script binds it to the matching stage's API Worker. Direct same-account `workers.dev` fetches can return Cloudflare error 1042; local Node development continues using `API_ORIGIN`.
+
+After provisioning a database and generating the release configuration, create an administrator without printing its key:
+
+```sh
+THREATSIEVE_WRANGLER_CONFIG=wrangler.deploy.local.json \
+  pnpm exec tsx scripts/tenant.ts 'Your organisation' admin@example.com --remote
+```
+
+The one-time key is written to `artifacts/tenant-credentials.local.json` with owner-only permissions. Use it at `/sign-in`, then store it in your secret manager. The bootstrap script resolves the `DB` binding, so it works with stage-specific database names. Never run the synthetic demo seed against production.
+
+The production acceptance check on 2026-10-06 exercised real Clef-flash and Clef escalation, persisted full distributions, exported STIX, created a secure browser session, and opened operations, sources, bulk analysis, clusters and inventory without browser exceptions. `example.com` returned unknown with no ATT&CK or actor assertion. Feed backfills run asynchronously; a successful sync request means queued, not that normalization has finished. ThreatFox and URLhaus require their own secrets before they can sync. Vectorize remains disabled until knowledge embeddings are populated.
+
+The EC2-hosted OpenCTI integration is documented in [OpenCTI hosting](opencti-hosting.md). ThreatSieve itself has no EKS dependency.

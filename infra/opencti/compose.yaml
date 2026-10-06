@@ -1,0 +1,127 @@
+name: threatsieve-opencti
+x-runtime: &runtime
+  restart: unless-stopped
+  security_opt: [no-new-privileges:true]
+  logging:
+    driver: local
+    options: { max-size: 10m, max-file: "3" }
+services:
+  redis:
+    <<: *runtime
+    image: redis:8.10.1
+    command: redis-server --appendonly yes
+    volumes: [redis:/data]
+    healthcheck:
+      test: [CMD, redis-cli, ping]
+      interval: 10s
+      retries: 10
+  elasticsearch:
+    <<: *runtime
+    image: docker.elastic.co/elasticsearch/elasticsearch:8.19.21
+    environment:
+      discovery.type: single-node
+      xpack.ml.enabled: "false"
+      xpack.security.enabled: "false"
+      ES_JAVA_OPTS: -Xms8g -Xmx8g
+    volumes: [elastic:/usr/share/elasticsearch/data]
+    ulimits:
+      nofile: { soft: 65536, hard: 65536 }
+    healthcheck:
+      test:
+        [
+          CMD-SHELL,
+          "curl -fsS http://localhost:9200/_cluster/health?wait_for_status=yellow >/dev/null",
+        ]
+      interval: 10s
+      retries: 60
+  minio:
+    <<: *runtime
+    image: pgsty/silo@sha256:635197cb9f36d01bee221d34d1c7d7960f6a95c48b0b6c01d99cd13bdae51a46
+    command: server /data
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER:?}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:?}
+    volumes: [objects:/data]
+    healthcheck:
+      test: [CMD, mc, ready, local]
+      interval: 10s
+      retries: 20
+  rabbitmq:
+    <<: *runtime
+    image: rabbitmq:4.3-management
+    environment:
+      RABBITMQ_DEFAULT_USER: ${RABBITMQ_DEFAULT_USER:?}
+      RABBITMQ_DEFAULT_PASS: ${RABBITMQ_DEFAULT_PASS:?}
+    volumes: [rabbit:/var/lib/rabbitmq]
+    healthcheck:
+      test: [CMD, rabbitmq-diagnostics, -q, ping]
+      interval: 10s
+      retries: 20
+  opencti:
+    <<: *runtime
+    image: opencti/platform:7.261002.0
+    ports: ["127.0.0.1:8080:8080"]
+    environment:
+      NODE_OPTIONS: --max-old-space-size=8096
+      APP__PORT: 8080
+      APP__BASE_URL: http://localhost:8080
+      APP__ADMIN__EMAIL: ${OPENCTI_ADMIN_EMAIL:?}
+      APP__ADMIN__PASSWORD: ${OPENCTI_ADMIN_PASSWORD:?}
+      APP__ADMIN__TOKEN: ${OPENCTI_ADMIN_TOKEN:?}
+      APP__ENCRYPTION_KEY: ${OPENCTI_ENCRYPTION_KEY:?}
+      APP__HEALTH_ACCESS_KEY: ${OPENCTI_HEALTHCHECK_ACCESS_KEY:?}
+      REDIS__HOSTNAME: redis
+      REDIS__PORT: 6379
+      ELASTICSEARCH__URL: http://elasticsearch:9200
+      ELASTICSEARCH__NUMBER_OF_REPLICAS: 0
+      MINIO__ENDPOINT: minio
+      MINIO__PORT: 9000
+      MINIO__USE_SSL: "false"
+      MINIO__ACCESS_KEY: ${MINIO_ROOT_USER:?}
+      MINIO__SECRET_KEY: ${MINIO_ROOT_PASSWORD:?}
+      RABBITMQ__HOSTNAME: rabbitmq
+      RABBITMQ__PORT: 5672
+      RABBITMQ__PORT_MANAGEMENT: 15672
+      RABBITMQ__MANAGEMENT_SSL: "false"
+      RABBITMQ__USERNAME: ${RABBITMQ_DEFAULT_USER:?}
+      RABBITMQ__PASSWORD: ${RABBITMQ_DEFAULT_PASS:?}
+      PROVIDERS__LOCAL__STRATEGY: LocalStrategy
+    depends_on:
+      redis: { condition: service_healthy }
+      elasticsearch: { condition: service_healthy }
+      minio: { condition: service_healthy }
+      rabbitmq: { condition: service_healthy }
+    healthcheck:
+      test:
+        [
+          CMD-SHELL,
+          'wget -qO- "http://localhost:8080/health?health_access_key=$$APP__HEALTH_ACCESS_KEY" >/dev/null',
+        ]
+      interval: 15s
+      timeout: 10s
+      retries: 60
+  worker:
+    <<: *runtime
+    image: opencti/worker:7.261002.0
+    environment:
+      OPENCTI_URL: http://opencti:8080
+      OPENCTI_TOKEN: ${OPENCTI_ADMIN_TOKEN:?}
+    depends_on:
+      opencti: { condition: service_healthy }
+  threatsieve:
+    <<: *runtime
+    build: ./connector
+    environment:
+      OPENCTI_URL: http://opencti:8080
+      OPENCTI_TOKEN: ${OPENCTI_CONNECTOR_TOKEN:-${OPENCTI_ADMIN_TOKEN}}
+      CONNECTOR_ID: ${CONNECTOR_ID:?}
+      CONNECTOR_NAME: ThreatSieve
+      THREATSIEVE_URL: ${THREATSIEVE_URL:?}
+      THREATSIEVE_API_KEY: ${THREATSIEVE_API_KEY:?}
+    depends_on:
+      opencti: { condition: service_healthy }
+volumes:
+  redis:
+  elastic:
+  objects:
+  rabbit:

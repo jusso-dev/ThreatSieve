@@ -1,4 +1,20 @@
 import { NextRequest } from "next/server";
+import { getCloudflareContext } from "@opennextjs/cloudflare";
+
+declare global {
+  interface CloudflareEnv {
+    THREATSIEVE_API?: { fetch(request: Request): Promise<Response> };
+  }
+}
+
+function apiBinding() {
+  try {
+    return getCloudflareContext().env.THREATSIEVE_API;
+  } catch {
+    // Next's Node development/test server has no Workers context.
+    return undefined;
+  }
+}
 export const dynamic = "force-dynamic";
 async function handler(
   request: NextRequest,
@@ -38,7 +54,7 @@ async function handler(
       { status: 413 },
     );
   try {
-    const response = await fetch(url, {
+    const upstream = new Request(url, {
       method: request.method,
       headers,
       body: ["GET", "HEAD"].includes(request.method) ? undefined : request.body,
@@ -46,6 +62,10 @@ async function handler(
       redirect: "manual",
       cache: "no-store",
     } as RequestInit);
+    const binding = apiBinding();
+    const response = binding
+      ? await binding.fetch(upstream)
+      : await fetch(upstream);
     const resultHeaders = new Headers();
     for (const key of [
       "content-type",

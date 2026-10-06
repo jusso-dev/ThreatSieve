@@ -67,6 +67,8 @@ For browser tests, run `pnpm exec e2e-web install chromium` once, then `pnpm tes
 
 ## Production deployment
 
+Hosted workspace: **[ThreatSieve on Cloudflare](https://threatsieve-web-production.yuma-it.workers.dev)**. Bring your workspace API key to sign in. OpenCTI runs separately on a private EC2 host; see [access and operations](docs/opencti-hosting.md).
+
 See [deployment](docs/deployment.md) for resource provisioning, migration review, secrets, staging and protected production releases. The checked-in D1 identifier is local-only and the deployment script requires a real ID. Nothing deploys to a Cloudflare account merely by installing or building the project.
 
 Commercial readiness still requires a deployment-specific review: provider redistribution agreements, measured model evaluations, customer SSO, retention policy, operational alerting, load tests and OpenCTI/Workers AI acceptance tests in the target environment. This repository provides a working MVP implementation and explicit scale/security boundaries; it does not claim those operational acceptance checks have happened automatically.

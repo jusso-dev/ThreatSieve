@@ -78,7 +78,10 @@ const web = JSON.parse(
 web.name = "threatsieve-web-" + stage;
 web.account_id = account;
 web.vars = { API_ORIGIN: apiOrigin };
-web.services = [{ binding: "WORKER_SELF_REFERENCE", service: web.name }];
+web.services = [
+  { binding: "WORKER_SELF_REFERENCE", service: web.name },
+  { binding: "THREATSIEVE_API", service: config.name },
+];
 mkdirSync("apps/web", { recursive: true });
 writeFileSync(
   "apps/web/wrangler.deploy.local.json",
