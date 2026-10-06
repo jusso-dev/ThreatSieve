@@ -1,6 +1,6 @@
 # Full-stack end-to-end testing
 
-The primary suite contains **60 end-to-end tests** and uses [tester-army/e2e](https://github.com/tester-army/e2e), pinned to `e2e@0.17.0` and `@e2e-dev/web@0.12.0`. Tests use its browser fixtures, semantic locators, exact assertions, route fault injection, downloads and polling. No agent or language-model call decides whether a test passes.
+The primary suite contains **61 end-to-end tests** and uses [tester-army/e2e](https://github.com/tester-army/e2e), pinned to `e2e@0.17.0` and `@e2e-dev/web@0.12.0`. Tests use its browser fixtures, semantic locators, exact assertions, route fault injection, downloads and polling. No agent or language-model call decides whether a test passes.
 
 ## Run
 
@@ -61,7 +61,7 @@ Feed responses are intercepted at the Workers outbound boundary. Unexpected dest
 | Tenant isolation                        | Private assessment/observable/search/graph/STIX access, feedback isolation, job and replay protection, telemetry exclusion, SQL-shaped searches, stored markup rendering, invented actor/ATT&CK override rejection                                                                        |
 | Responsive and keyboard UX              | Full-document sidebar rail, short viewport, dialog forward/reverse focus containment, Escape/focus restoration, mobile navigation, overflow checks for primary pages                                                                                                                      |
 
-The seven earlier Playwright regressions remain in `tests/e2e/` and run in CI as `pnpm test:playwright`, including timer-controlled polling behavior. Unit, repository, migration, classifier, adversarial-input and evaluation tests continue under `pnpm test` and `pnpm eval`.
+The eight additional Playwright regressions remain in `tests/e2e/` and run in CI as `pnpm test:playwright`, including timer-controlled polling behavior. Unit, repository, migration, classifier, adversarial-input and evaluation tests continue under `pnpm test` and `pnpm eval`.
 
 ## Reports and debugging
 
@@ -80,3 +80,5 @@ These tests establish application behavior against the local Workers runtime. Re
 The suite uses real Better Auth sessions against ephemeral D1, with an email binding that captures messages in test-only R2. It exercises invitation → signup → email verification → acceptance, member roles, last-admin protection, resend/cancellation, password reset and revocation, toast feedback and mobile layout. Integration tests additionally prove wrong-recipient rejection, cross-tenant membership isolation, immediate authorization changes, atomic last-admin protection, single-use reset links and recoverable delivery failures. No test sends email or uses a deployed account.
 
 To refresh account/team README images, run `UPDATE_SCREENSHOTS=1 pnpm test:e2e tests/system/team-access.e2e.ts`. These images use synthetic accounts only.
+
+The offline Worker bundles with the same `workerd`/`worker` export conditions as Wrangler. This ensures Better Auth uses native AsyncLocalStorage instead of its single-request browser fallback. A concurrency regression validates parallel authenticated reads and sign-out against the real Worker runtime.

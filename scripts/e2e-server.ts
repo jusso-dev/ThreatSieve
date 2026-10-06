@@ -19,6 +19,8 @@ async function main() {
     bundle: true,
     format: "esm",
     platform: "browser",
+    // Match Wrangler: Better Auth must use native request-local storage, not its browser polyfill.
+    conditions: ["workerd", "worker"],
     external: ["node:*"],
     target: "es2022",
   });
