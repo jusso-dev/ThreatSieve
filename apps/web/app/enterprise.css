@@ -894,3 +894,26 @@ textarea {
   padding: 12px 0;
   border-bottom: 1px solid var(--border);
 }
+
+.ops-alerts {
+  display: grid;
+  gap: 0;
+}
+.ops-alert {
+  padding: 12px 14px;
+  border-bottom: 1px solid var(--border);
+  border-left: 3px solid #b26a27;
+}
+.ops-alert.critical {
+  border-left-color: #b54141;
+}
+.ops-alert p {
+  margin: 5px 0;
+}
+.ops-alert small {
+  font-size: 11px;
+  color: var(--muted-foreground);
+}
+.ops-alert a {
+  margin-left: 16px;
+}

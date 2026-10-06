@@ -162,6 +162,7 @@ export const Stage = z.enum([
 ]);
 export const JobSchema = z.object({
   jobId: z.string(),
+  generation: z.number().int().min(0).optional(),
   tenantId: z.string().optional(),
   entityId: z.string(),
   stage: Stage,
@@ -381,6 +382,8 @@ export const Scopes = z.enum([
   "assessment:write",
   "feeds:read",
   "feeds:write",
+  "ops:read",
+  "integration:write",
   "admin",
 ]);
 export type Scope = z.infer<typeof Scopes>;

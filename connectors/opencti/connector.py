@@ -36,18 +36,53 @@ class ThreatSieveConnector:
             UUID(value)
         if len(self.collections) > 20:
             raise ValueError("Configure at most 20 collections per connector")
+        self.heartbeat_enabled = os.getenv("THREATSIEVE_HEARTBEAT", "false").lower() == "true"
+        self.version = "enterprise-delivery-v2"
         self.session = requests.Session()
         self.session.headers.update({"Authorization": "Bearer " + os.environ["THREATSIEVE_API_KEY"]})
 
     def get(self, path):
         response = self.session.get(self.url + path, timeout=60, allow_redirects=False, stream=True)
-        response.raise_for_status()
-        data = bytearray()
-        for chunk in response.iter_content(65536):
-            data.extend(chunk)
-            if len(data) > 16 * 1024 * 1024:
-                raise ValueError("ThreatSieve response exceeds 16 MiB")
-        return json.loads(data)
+        try:
+            response.raise_for_status()
+            if response.status_code != 200:
+                raise ValueError("ThreatSieve returned an unexpected status")
+            data = bytearray()
+            for chunk in response.iter_content(65536):
+                data.extend(chunk)
+                if len(data) > 16 * 1024 * 1024:
+                    raise ValueError("ThreatSieve response exceeds 16 MiB")
+            return json.loads(data)
+        finally:
+            response.close()
+
+    def heartbeat(self, status, error_type=None):
+        if not self.heartbeat_enabled:
+            return
+        payload = {"connector_id": self.helper.connect_id, "status": status, "version": self.version}
+        if error_type:
+            payload["error_type"] = error_type
+        response = self.session.post(self.url + "/v1/integrations/opencti/heartbeat", json=payload,
+                                     timeout=15, allow_redirects=False)
+        try:
+            response.raise_for_status()
+            if response.status_code != 200:
+                raise ValueError("Heartbeat returned an unexpected status")
+        finally:
+            response.close()
+
+    def poll(self):
+        # Monitoring failures never undo a successfully committed delivery cursor.
+        status, error_type = "ok", None
+        try:
+            self.sync()
+        except Exception as error:
+            status, error_type = "error", type(error).__name__
+            self.helper.connector_logger.error("ThreatSieve sync failed", {"error_type": error_type})
+        try:
+            self.heartbeat(status, error_type)
+        except Exception as error:
+            self.helper.connector_logger.error("ThreatSieve heartbeat failed", {"error_type": type(error).__name__})
 
     def sync(self):
         state = self.helper.get_state() or {}
@@ -98,11 +133,7 @@ class ThreatSieveConnector:
 
     def run(self):
         while True:
-            try:
-                self.sync()
-            except Exception as error:
-                # Exception text may contain URLs or credentials; log only its class.
-                self.helper.connector_logger.error("ThreatSieve sync failed", {"error_type": type(error).__name__})
+            self.poll()
             time.sleep(int(os.getenv("CONNECTOR_INTERVAL_SECONDS", "60")))
 
 

@@ -70,5 +70,52 @@ class CollectionDelivery(unittest.TestCase):
         self.connector.helper.set_state.assert_not_called()
 
 
+class PollHealth(unittest.TestCase):
+    def setUp(self):
+        self.connector = module.ThreatSieveConnector.__new__(module.ThreatSieveConnector)
+        self.connector.helper = Mock()
+        self.connector.sync = Mock()
+        self.connector.heartbeat = Mock()
+
+    def test_successful_poll_reports_success(self):
+        self.connector.poll()
+        self.connector.heartbeat.assert_called_once_with("ok", None)
+
+    def test_delivery_failure_reports_only_error_class(self):
+        self.connector.sync.side_effect = RuntimeError("sensitive upstream text")
+        self.connector.poll()
+        self.connector.heartbeat.assert_called_once_with("error", "RuntimeError")
+        self.assertNotIn("sensitive", str(self.connector.helper.connector_logger.mock_calls))
+
+    def test_monitoring_failure_does_not_redeliver_or_roll_back_cursor(self):
+        self.connector.heartbeat.side_effect = RuntimeError("monitor offline")
+        self.connector.poll()
+        self.connector.sync.assert_called_once()
+
+
+class TransportSafety(unittest.TestCase):
+    def test_redirect_rejected_and_response_always_closed(self):
+        connector = module.ThreatSieveConnector.__new__(module.ThreatSieveConnector)
+        connector.url = "https://api.example"
+        connector.session = Mock()
+        response = connector.session.get.return_value
+        response.status_code = 302
+        with self.assertRaises(ValueError):
+            connector.get("/v1/exports")
+        response.close.assert_called_once()
+        self.assertFalse(connector.session.get.call_args.kwargs["allow_redirects"])
+
+    def test_restarted_delivery_reuses_object_ids(self):
+        case = CollectionDelivery()
+        case.setUp()
+        connector = case.connector
+        connector.get = Mock(side_effect=[case.publication, {"objects": [case.obj], "more": False}, case.publication, {"objects": [case.obj], "more": False}])
+        # Simulate crash before cursor persistence. Replayed bundles retain stable object identities.
+        connector.sync_collections({})
+        connector.sync_collections({})
+        calls = connector.helper.send_stix2_bundle.call_args_list
+        self.assertEqual(json.loads(calls[0].args[0])["objects"], json.loads(calls[1].args[0])["objects"])
+
+
 if __name__ == "__main__":
     unittest.main()

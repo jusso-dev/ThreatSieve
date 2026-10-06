@@ -206,6 +206,8 @@ export const roleScopes: Record<string, Scope[]> = {
     "assessment:write",
     "feeds:read",
     "feeds:write",
+    "ops:read",
+    "integration:write",
   ],
   analyst: ["intel:read", "assessment:read", "assessment:write", "feeds:read"],
   viewer: ["intel:read", "assessment:read", "feeds:read"],

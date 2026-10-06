@@ -270,9 +270,9 @@ export async function finalizeFeeds(env: AppEnv) {
         .first<{ n: number }>();
       if (failed?.n)
         await env.DB.prepare(
-          "UPDATE sources SET status='error',last_error='Processing jobs exhausted retries; replay failed feed jobs' WHERE id=?",
+          "UPDATE sources SET status='error',last_error='Processing jobs exhausted retries; replay failed feed jobs' WHERE id=? AND EXISTS(SELECT 1 FROM feed_locks WHERE source_id=? AND job_id=?)",
         )
-          .bind(job.entityId)
+          .bind(job.entityId, job.entityId, job.jobId)
           .run();
       continue;
     }
@@ -289,12 +289,27 @@ export async function finalizeFeeds(env: AppEnv) {
     )
       .bind(job.jobId)
       .first<{ added: number; updated: number; rejected: number }>();
-    await env.DB.batch([
+    const finalizedAt = new Date().toISOString(),
+      token = crypto.randomUUID();
+    const gate =
+      "EXISTS(SELECT 1 FROM pipeline_jobs WHERE id=? AND json_extract(result,'$.finalizationToken')=?)";
+    const committed = await env.DB.batch([
       env.DB.prepare(
-        "UPDATE sources SET status=?,last_sync=?,next_sync=?,records_processed=records_processed+?,records_added=records_added+?,records_updated=records_updated+?,errors=errors+?,last_error=? WHERE id=?",
+        "UPDATE pipeline_jobs SET result=? WHERE id=? AND json_extract(result,'$.finalized') IS NULL",
+      ).bind(
+        JSON.stringify({
+          ...result,
+          finalized: true,
+          finalizationToken: token,
+        }),
+        job.jobId,
+      ),
+      env.DB.prepare(
+        "UPDATE sources SET status=?,last_sync=?,next_sync=?,records_processed=records_processed+?,records_added=records_added+?,records_updated=records_updated+?,errors=errors+?,last_error=? WHERE id=? AND " +
+          gate,
       ).bind(
         totals?.rejected ? "degraded" : "healthy",
-        new Date().toISOString(),
+        finalizedAt,
         new Date(Date.now() + 21600000).toISOString(),
         result.records,
         totals?.added ?? 0,
@@ -302,19 +317,20 @@ export async function finalizeFeeds(env: AppEnv) {
         totals?.rejected ?? 0,
         totals?.rejected ? "Malformed records quarantined" : null,
         job.entityId,
-      ),
-      env.DB.prepare(
-        "INSERT INTO feed_checkpoints VALUES(?,?,?) ON CONFLICT(source_id) DO UPDATE SET checkpoint=excluded.checkpoint,updated_at=excluded.updated_at",
-      ).bind(job.entityId, result.checkpoint, new Date().toISOString()),
-      env.DB.prepare(
-        "DELETE FROM feed_locks WHERE source_id=? AND job_id=?",
-      ).bind(job.entityId, job.jobId),
-      env.DB.prepare("UPDATE pipeline_jobs SET result=? WHERE id=?").bind(
-        JSON.stringify({ ...result, finalized: true }),
         job.jobId,
+        token,
       ),
+      env.DB.prepare(
+        "INSERT INTO feed_checkpoints SELECT ?,?,? WHERE " +
+          gate +
+          " ON CONFLICT(source_id) DO UPDATE SET checkpoint=excluded.checkpoint,updated_at=excluded.updated_at",
+      ).bind(job.entityId, result.checkpoint, finalizedAt, job.jobId, token),
+      env.DB.prepare(
+        "DELETE FROM feed_locks WHERE source_id=? AND job_id=? AND " + gate,
+      ).bind(job.entityId, job.jobId, job.jobId, token),
     ]);
-    if (result.more) await queueFeedSync(env, job.entityId);
+    if (result.more && committed[0]!.meta.changes)
+      await queueFeedSync(env, job.entityId);
   }
 }
 

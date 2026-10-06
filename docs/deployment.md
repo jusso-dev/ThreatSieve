@@ -89,3 +89,8 @@ Migrations 0009–0014 add scoped workspace objects, sightings, source ratings, 
 New operations jobs share the existing ingest queue and its dead-letter controls. Review queue age and D1 storage growth after enabling broad watchlists/requirements. Initial matching is asynchronous and can process many existing records. The pipeline does not claim that an arbitrary million-record workload has been load-tested. Configure retention for archives, event histories, old TAXII generations and execution records according to contractual requirements before commercial rollout.
 
 Optional source and integration settings are documented in [TAXII/MISP](taxii-misp.md) and [automation](automation.md). Keep credentials and integration target configuration in encrypted Worker environment values; the repository contains no active webhook targets.
+
+
+## Operational reliability release
+
+Migrations 0015–0016 add outbox reservations, delivery generation recovery, operational indexes and tenant-scoped connector heartbeats. Record a D1 Time Travel bookmark before applying them, deploy the API, then the web Worker. The new **System health** page and least-privilege external probe are documented in [production operations](operations.md). Recovery preserves committed intelligence and does not claim that an accepted queue message is a completed source sync.

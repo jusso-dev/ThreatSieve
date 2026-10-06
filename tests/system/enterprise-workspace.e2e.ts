@@ -460,6 +460,7 @@ test("enterprise workspaces, dossier, graph and source console render without mo
       "entity-dossier",
     ],
     ["/sources/mitre", "MITRE ATT&CK", "source-operations"],
+    ["/system", "System health", "system-health"],
   ]) {
     await browser.setViewport({ width: 1440, height: 1000 });
     await browser.goto(path!);
@@ -475,4 +476,32 @@ test("enterprise workspaces, dossier, graph and source console render without mo
       ),
     ).toBe(true);
   }
+});
+
+test("system health reports unavailable integrations honestly and refreshes", async ({
+  browser,
+  screen,
+  workspace,
+}) => {
+  await browser.goto("/system");
+  await expect(
+    screen.getByRole("heading", "System health", { exact: true }),
+  ).toBeVisible();
+  await expect(
+    screen.getByText(
+      "No connector heartbeat is registered. Connection health has not been verified.",
+    ),
+  ).toBeVisible();
+  await screen.getByRole("button", "Refresh health").click();
+  await expect(
+    screen.getByRole("heading", "Pipeline jobs", { exact: true }),
+  ).toBeVisible();
+  const response = await request(workspace, "/v1/ops/status");
+  expect(response.status).toBe(200);
+  const report = await json<{
+    alerts: { code: string }[];
+    integrations: unknown[];
+  }>(response);
+  expect(report.integrations).toHaveLength(0);
+  expect(report.alerts.some((a) => a.code === "SCHEDULER_STALE")).toBe(true);
 });

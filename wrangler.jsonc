@@ -34,7 +34,12 @@
       "bucket_name": "threatsieve-archive",
     },
   ],
-  "send_email": [{ "name": "EMAIL", "allowed_sender_addresses": ["threatsieve@yumait.com.au"] }],
+  "send_email": [
+    {
+      "name": "EMAIL",
+      "allowed_sender_addresses": ["threatsieve@yumait.com.au"],
+    },
+  ],
   "ai": {
     "binding": "AI",
     "remote": true,
@@ -75,42 +80,49 @@
     "consumers": [
       {
         "queue": "intel-ingest",
+        "max_concurrency": 2,
         "max_batch_size": 1,
         "max_retries": 5,
         "dead_letter_queue": "intel-dead-letter",
       },
       {
         "queue": "intel-normalise",
+        "max_concurrency": 6,
         "max_batch_size": 1,
         "max_retries": 5,
         "dead_letter_queue": "intel-dead-letter",
       },
       {
         "queue": "intel-enrich",
-        "max_batch_size": 5,
+        "max_concurrency": 8,
+        "max_batch_size": 100,
         "max_retries": 5,
         "dead_letter_queue": "intel-dead-letter",
       },
       {
         "queue": "intel-correlate",
+        "max_concurrency": 8,
         "max_batch_size": 5,
         "max_retries": 5,
         "dead_letter_queue": "intel-dead-letter",
       },
       {
         "queue": "intel-classify",
+        "max_concurrency": 2,
         "max_batch_size": 2,
         "max_retries": 5,
         "dead_letter_queue": "intel-dead-letter",
       },
       {
         "queue": "intel-export",
+        "max_concurrency": 2,
         "max_batch_size": 5,
         "max_retries": 5,
         "dead_letter_queue": "intel-dead-letter",
       },
       {
         "queue": "intel-dead-letter",
+        "max_concurrency": 2,
         "max_batch_size": 10,
       },
     ],

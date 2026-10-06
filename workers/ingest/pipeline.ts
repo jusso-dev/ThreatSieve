@@ -1,3 +1,4 @@
+import { dispatchOutbox, deadLetter } from "./reliability";
 import { deliverIntegration } from "../../packages/enterprise/src/integrations";
 import {
   processOperation,
@@ -56,28 +57,7 @@ function next(
     attempt: 0,
   };
 }
-export async function dispatchOutbox(env: AppEnv) {
-  const rows = await env.DB.prepare(
-    "SELECT id,queue,data FROM outbox WHERE dispatched_at IS NULL ORDER BY created_at LIMIT 100",
-  ).all<{ id: string; queue: string; data: string }>();
-  const bindings: Record<string, Queue> = {
-    ingest: env.INGEST_QUEUE,
-    normalise: env.NORMALISE_QUEUE,
-    enrich: env.ENRICH_QUEUE,
-    correlate: env.CORRELATE_QUEUE,
-    classify: env.CLASSIFY_QUEUE,
-    export: env.EXPORT_QUEUE,
-  };
-  for (const row of rows.results) {
-    const queue = bindings[row.queue];
-    if (!queue) throw new Error("Unknown outbox queue");
-    await queue.send(JobSchema.parse(JSON.parse(row.data)));
-    await env.DB.prepare("UPDATE outbox SET dispatched_at=? WHERE id=?")
-      .bind(new Date().toISOString(), row.id)
-      .run();
-  }
-  return rows.results.length;
-}
+export { dispatchOutbox } from "./reliability";
 export async function processJob(env: AppEnv, job: PipelineJob) {
   const repo = new Repository(env.DB);
   switch (job.stage) {
@@ -188,6 +168,49 @@ export async function processJob(env: AppEnv, job: PipelineJob) {
   }
 }
 export async function consume(batch: MessageBatch<unknown>, env: AppEnv) {
+  const isDeadLetter = /^intel-dead-letter(?:-(?:staging|production))?$/.test(
+    batch.queue,
+  );
+  // One bounded read per batch avoids a database write for every stale transport copy.
+  const states = new Map<
+    string,
+    {
+      id: string;
+      status: string;
+      generation: number;
+      result: string | null;
+      lease_until: string | null;
+    }
+  >();
+  if (!isDeadLetter) {
+    const ids = [
+      ...new Set(
+        batch.messages.flatMap((m) => {
+          const p = JobSchema.safeParse(m.body);
+          return p.success ? [p.data.jobId] : [];
+        }),
+      ),
+    ];
+    for (let offset = 0; offset < ids.length; offset += 80) {
+      const chunk = ids.slice(offset, offset + 80);
+      const rows = await env.DB.prepare(
+        "SELECT id,status,COALESCE(json_extract(data,'$.generation'),0) AS generation,result,lease_until FROM pipeline_jobs WHERE id IN (" +
+          chunk.map(() => "?").join(",") +
+          ")",
+      )
+        .bind(...chunk)
+        .all<{
+          id: string;
+          status: string;
+          generation: number;
+          result: string | null;
+          lease_until: string | null;
+        }>();
+      for (const row of rows.results) states.set(row.id, row);
+    }
+  }
+  const seen = new Set<string>();
+  let processed = false;
   for (const message of batch.messages) {
     const parsed = JobSchema.safeParse(message.body);
     if (!parsed.success) {
@@ -205,25 +228,34 @@ export async function consume(batch: MessageBatch<unknown>, env: AppEnv) {
     }
     const job = parsed.data;
     const repo = new Repository(env.DB);
-    if (/^intel-dead-letter(?:-(?:staging|production))?$/.test(batch.queue)) {
-      await env.DB.prepare(
-        "UPDATE pipeline_jobs SET status='failed',error_type='RetriesExhausted',updated_at=? WHERE id=?",
-      )
-        .bind(new Date().toISOString(), job.jobId)
-        .run();
+    if (isDeadLetter) {
+      await deadLetter(env.DB, job);
       message.ack();
       continue;
     }
+    const state = states.get(job.jobId),
+      delivery = job.jobId + ":" + (job.generation ?? 0);
+    if (
+      !state ||
+      state.result !== null ||
+      state.generation !== (job.generation ?? 0) ||
+      state.status === "failed" ||
+      state.status === "complete" ||
+      (state.status === "running" &&
+        state.lease_until &&
+        state.lease_until > new Date().toISOString()) ||
+      seen.has(delivery)
+    ) {
+      message.ack();
+      continue;
+    }
+    seen.add(delivery);
+    processed = true;
     const start = Date.now();
     try {
       if (!(await repo.claim(job))) {
-        const state = await env.DB.prepare(
-          "SELECT status FROM pipeline_jobs WHERE id=?",
-        )
-          .bind(job.jobId)
-          .first<{ status: string }>();
-        if (state?.status === "running") message.retry({ delaySeconds: 60 });
-        else message.ack();
+        // The owner retains the lease. Cron recovers an abandoned owner; duplicate copies do not consume its retry budget.
+        message.ack();
         continue;
       }
       await processJob(env, job);
@@ -238,9 +270,14 @@ export async function consume(batch: MessageBatch<unknown>, env: AppEnv) {
       });
     } catch (error) {
       await env.DB.prepare(
-        "UPDATE pipeline_jobs SET status='queued',lease_until=NULL,error_type=?,updated_at=? WHERE id=?",
+        "UPDATE pipeline_jobs SET status='queued',lease_until=NULL,error_type=?,updated_at=? WHERE id=? AND status='running' AND result IS NULL AND COALESCE(json_extract(data,'$.generation'),0)=?",
       )
-        .bind(errorType(error), new Date().toISOString(), job.jobId)
+        .bind(
+          errorType(error),
+          new Date().toISOString(),
+          job.jobId,
+          job.generation ?? 0,
+        )
         .run();
       log({
         job_id: job.jobId,
@@ -254,7 +291,9 @@ export async function consume(batch: MessageBatch<unknown>, env: AppEnv) {
       message.retry({ delaySeconds: Math.min(300, 2 ** message.attempts * 5) });
     }
   }
-  await scheduleOperations(env.DB);
-  await dispatchOutbox(env);
-  await finalizeFeeds(env);
+  if (processed) {
+    await scheduleOperations(env.DB);
+    await dispatchOutbox(env);
+    await finalizeFeeds(env);
+  }
 }

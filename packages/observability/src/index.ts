@@ -23,5 +23,17 @@ export class AppError extends Error {
   }
 }
 export function errorType(error: unknown) {
-  return error instanceof Error ? error.constructor.name : "UnknownError";
+  if (!(error instanceof Error)) return "UnknownError";
+  if (error instanceof AppError) return error.code;
+  // Store only stable categories, never provider messages containing URLs or credentials.
+  if (/D1|SQLITE/i.test(error.message)) {
+    if (/overload|too many|busy|rate.?limit/i.test(error.message))
+      return "D1Overloaded";
+    if (/timeout|timed out/i.test(error.message)) return "D1Timeout";
+    if (/constraint|foreign key/i.test(error.message)) return "D1Constraint";
+    return "D1Error";
+  }
+  if (/subrequest.*limit|too many subrequests/i.test(error.message))
+    return "SubrequestLimit";
+  return error.constructor.name;
 }

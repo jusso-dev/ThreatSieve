@@ -118,6 +118,8 @@ services:
       CONNECTOR_NAME: ThreatSieve
       THREATSIEVE_URL: ${THREATSIEVE_URL:?}
       THREATSIEVE_API_KEY: ${THREATSIEVE_API_KEY:?}
+      THREATSIEVE_COLLECTION_IDS: ${THREATSIEVE_COLLECTION_IDS:-}
+      THREATSIEVE_HEARTBEAT: ${THREATSIEVE_HEARTBEAT:-false}
     depends_on:
       opencti: { condition: service_healthy }
 volumes:

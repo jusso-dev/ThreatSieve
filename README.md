@@ -131,6 +131,10 @@ Screenshots use explicitly synthetic demonstration intelligence.
 
 ![Feed health, collection history, source ratings, policy and provenance](docs/images/source-operations.png)
 
+### System health
+
+![Feed freshness, pipeline backlog, classification allowance and OpenCTI delivery monitoring](docs/images/system-health.png)
+
 Captured from the running application with the labelled synthetic demo dataset. These images show the desktop workspace and responsive mobile layout; displayed probabilities are demonstration values.
 
 ### Investigation, evidence and intelligence graph

@@ -1,0 +1,28 @@
+name: Production health
+on:
+  schedule:
+    - cron: "7,22,37,52 * * * *"
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: production-health
+  cancel-in-progress: false
+jobs:
+  probe:
+    if: vars.ENABLE_PRODUCTION_MONITORING == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - name: Check API, database readiness and operational thresholds
+        run: pnpm exec tsx scripts/check-production.ts
+        env:
+          THREATSIEVE_API_ORIGIN: ${{ vars.THREATSIEVE_PRODUCTION_API_ORIGIN }}
+          THREATSIEVE_MONITOR_KEY: ${{ secrets.THREATSIEVE_MONITOR_KEY }}

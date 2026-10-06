@@ -1,3 +1,11 @@
+import {
+  operationalReport,
+  recordMaintenanceHeartbeat,
+} from "../../../packages/observability/src/health";
+import {
+  replayJob,
+  recoverExpiredJobs,
+} from "../../../workers/ingest/reliability";
 import { scheduleOperations } from "../../../packages/enterprise/src/automation";
 import { enterpriseRoutes } from "./enterprise";
 import {
@@ -496,14 +504,12 @@ app.post("/v1/jobs/:id/replay", scope("admin"), async (c) => {
       409,
       "Only failed jobs can be replayed",
     );
-  await c.env.DB.batch([
-    c.env.DB.prepare(
-      "UPDATE pipeline_jobs SET status='queued',lease_until=NULL WHERE id=? AND tenant_id=? AND status='failed'",
-    ).bind(c.req.param("id")!, p.tenantId),
-    c.env.DB.prepare("UPDATE outbox SET dispatched_at=NULL WHERE id=?").bind(
-      c.req.param("id")!,
-    ),
-  ]);
+  if (!(await replayJob(c.env.DB, c.req.param("id")!)))
+    throw new AppError(
+      "JOB_NOT_FAILED",
+      409,
+      "Job changed; refresh its status before retrying.",
+    );
   await repo.audit(p, "job.replay", c.req.param("id")!, c.get("requestId"));
   c.executionCtx.waitUntil(dispatchOutbox(c.env));
   return c.json({ status: "queued" });
@@ -935,9 +941,9 @@ app.post("/v1/feeds/:id/sync", scope("feeds:write"), async (c) => {
 });
 app.get("/v1/feeds/:id/jobs", scope("feeds:read"), async (c) => {
   const rows = await c.env.DB.prepare(
-    "SELECT id,stage,status,error_type,updated_at FROM pipeline_jobs WHERE tenant_id IS NULL AND (entity_id=? OR json_extract(data,'$.payload.feedId')=?) AND status!='complete' ORDER BY updated_at DESC LIMIT 100",
+    "SELECT id,stage,status,error_type,updated_at FROM pipeline_jobs WHERE tenant_id IS NULL AND (entity_id=? OR json_extract(data,'$.payload.feedId')=? OR json_extract(data,'$.correlationId') IN (SELECT json_extract(data,'$.correlationId') FROM pipeline_jobs WHERE stage='feed-sync' AND entity_id=?)) AND status!='complete' ORDER BY updated_at DESC LIMIT 100",
   )
-    .bind(c.req.param("id")!, c.req.param("id")!)
+    .bind(c.req.param("id")!, c.req.param("id")!, c.req.param("id")!)
     .all();
   return c.json({ data: rows.results });
 });
@@ -959,14 +965,12 @@ app.post(
         409,
         "Only failed jobs can be replayed",
       );
-    await c.env.DB.batch([
-      c.env.DB.prepare(
-        "UPDATE pipeline_jobs SET status='queued',lease_until=NULL,error_type=NULL WHERE id=?",
-      ).bind(jobId),
-      c.env.DB.prepare("UPDATE outbox SET dispatched_at=NULL WHERE id=?").bind(
-        jobId,
-      ),
-    ]);
+    if (!(await replayJob(c.env.DB, jobId)))
+      throw new AppError(
+        "JOB_NOT_FAILED",
+        409,
+        "Job changed; refresh its status before retrying.",
+      );
     await new Repository(c.env.DB).audit(
       c.get("principal"),
       "feed.job.replay",
@@ -1177,6 +1181,43 @@ app.get("/v1/exports/:id", scope("assessment:read"), async (c) => {
     },
   });
 });
+app.get("/v1/ops/status", scope("ops:read"), async (c) =>
+  c.json(await operationalReport(c.env, c.get("principal").tenantId)),
+);
+app.post(
+  "/v1/integrations/opencti/heartbeat",
+  scope("integration:write"),
+  async (c) => {
+    const input = z
+      .object({
+        connector_id: z.uuid(),
+        status: z.enum(["ok", "error"]),
+        error_type: z
+          .string()
+          .regex(/^[A-Za-z][A-Za-z0-9_]{0,79}$/)
+          .optional(),
+        version: z.string().regex(/^[a-zA-Z0-9._-]{1,100}$/),
+      })
+      .parse(await json(c));
+    const now = new Date().toISOString();
+    await c.env.DB.prepare(
+      "INSERT INTO integration_heartbeats VALUES(?,?,?,?,?,?,?) ON CONFLICT(tenant_id,connector_id) DO UPDATE SET last_poll_at=excluded.last_poll_at,last_success_at=COALESCE(excluded.last_success_at,integration_heartbeats.last_success_at),status=excluded.status,error_type=excluded.error_type,version=excluded.version",
+    )
+      .bind(
+        c.get("principal").tenantId,
+        input.connector_id,
+        now,
+        input.status === "ok" ? now : null,
+        input.status,
+        input.status === "error"
+          ? (input.error_type ?? "ConnectorError")
+          : null,
+        input.version,
+      )
+      .run();
+    return c.json({ status: "recorded" });
+  },
+);
 app.get("/v1/ops", scope("admin"), async (c) => {
   const tenant = c.get("principal").tenantId;
   const jobs = await c.env.DB.prepare(
@@ -1227,12 +1268,14 @@ export default {
             await queueFeedSync(env, source.id);
           }
         }
+        await recoverExpiredJobs(env.DB);
         await scheduleOperations(env.DB);
         await dispatchOutbox(env);
         await finalizeFeeds(env);
         await env.DB.prepare("DELETE FROM rate_limits WHERE expires_at<?")
           .bind(Math.floor(Date.now() / 60000))
           .run();
+        await recordMaintenanceHeartbeat(env);
       })(),
     );
   },

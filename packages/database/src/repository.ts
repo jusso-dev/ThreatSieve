@@ -595,7 +595,11 @@ export class Repository {
   }
   jobStatements(
     job: PipelineJob,
-    gate: { feedbackId?: string; requestKey?: string } = {},
+    gate: {
+      feedbackId?: string;
+      requestKey?: string;
+      delivery?: { id: string; generation: number };
+    } = {},
   ) {
     const queue = ["feed-sync", "bulk", "operations"].includes(job.stage)
       ? "ingest"
@@ -603,7 +607,7 @@ export class Repository {
     return [
       this.db
         .prepare(
-          "INSERT OR IGNORE INTO pipeline_jobs(id,tenant_id,entity_id,stage,status,data,created_at,updated_at) SELECT ?,?,?,?,'queued',?,?,? WHERE (? IS NULL OR EXISTS(SELECT 1 FROM analyst_feedback WHERE id=?)) AND (? IS NULL OR EXISTS(SELECT 1 FROM request_idempotency WHERE tenant_id=? AND request_key=? AND job_id=?))",
+          "INSERT OR IGNORE INTO pipeline_jobs(id,tenant_id,entity_id,stage,status,data,created_at,updated_at) SELECT ?,?,?,?,'queued',?,?,? WHERE (? IS NULL OR EXISTS(SELECT 1 FROM analyst_feedback WHERE id=?)) AND (? IS NULL OR EXISTS(SELECT 1 FROM request_idempotency WHERE tenant_id=? AND request_key=? AND job_id=?)) AND (? IS NULL OR EXISTS(SELECT 1 FROM pipeline_jobs WHERE id=? AND status='complete' AND COALESCE(json_extract(data,'$.generation'),0)=?))",
         )
         .bind(
           job.jobId,
@@ -619,10 +623,13 @@ export class Repository {
           job.tenantId ?? null,
           gate.requestKey ?? null,
           job.jobId,
+          gate.delivery?.id ?? null,
+          gate.delivery?.id ?? null,
+          gate.delivery?.generation ?? 0,
         ),
       this.db
         .prepare(
-          "INSERT OR IGNORE INTO outbox(id,queue,data,created_at) SELECT ?,?,?,? WHERE (? IS NULL OR EXISTS(SELECT 1 FROM analyst_feedback WHERE id=?)) AND (? IS NULL OR EXISTS(SELECT 1 FROM request_idempotency WHERE tenant_id=? AND request_key=? AND job_id=?))",
+          "INSERT OR IGNORE INTO outbox(id,queue,data,created_at) SELECT ?,?,?,? WHERE (? IS NULL OR EXISTS(SELECT 1 FROM analyst_feedback WHERE id=?)) AND (? IS NULL OR EXISTS(SELECT 1 FROM request_idempotency WHERE tenant_id=? AND request_key=? AND job_id=?)) AND (? IS NULL OR EXISTS(SELECT 1 FROM pipeline_jobs WHERE id=? AND status='complete' AND COALESCE(json_extract(data,'$.generation'),0)=?))",
         )
         .bind(
           job.jobId,
@@ -635,6 +642,9 @@ export class Repository {
           job.tenantId ?? null,
           gate.requestKey ?? null,
           job.jobId,
+          gate.delivery?.id ?? null,
+          gate.delivery?.id ?? null,
+          gate.delivery?.generation ?? 0,
         ),
     ];
   }
@@ -645,11 +655,21 @@ export class Repository {
     const statements = [
       this.db
         .prepare(
-          "UPDATE pipeline_jobs SET status='complete',result=?,lease_until=NULL,updated_at=? WHERE id=?",
+          "UPDATE pipeline_jobs SET status='complete',result=?,error_type=NULL,lease_until=NULL,updated_at=? WHERE id=? AND COALESCE(json_extract(data,'$.generation'),0)=?",
         )
-        .bind(JSON.stringify(result), new Date().toISOString(), job.jobId),
+        .bind(
+          JSON.stringify(result),
+          new Date().toISOString(),
+          job.jobId,
+          job.generation ?? 0,
+        ),
     ];
-    if (next) statements.push(...this.jobStatements(next));
+    if (next)
+      statements.push(
+        ...this.jobStatements(next, {
+          delivery: { id: job.jobId, generation: job.generation ?? 0 },
+        }),
+      );
     await this.db.batch(statements);
   }
   async job(tenantId: string, id: string) {
@@ -665,9 +685,9 @@ export class Repository {
     const until = new Date(Date.now() + 300000).toISOString();
     const r = await this.db
       .prepare(
-        "UPDATE pipeline_jobs SET status='running',attempt=attempt+1,lease_until=?,updated_at=? WHERE id=? AND (status='queued' OR (status='running' AND lease_until<?))",
+        "UPDATE pipeline_jobs SET status='running',attempt=attempt+1,lease_until=?,updated_at=? WHERE id=? AND result IS NULL AND COALESCE(json_extract(data,'$.generation'),0)=? AND status='queued'",
       )
-      .bind(until, now, job.jobId, now)
+      .bind(until, now, job.jobId, job.generation ?? 0)
       .run();
     return r.meta.changes > 0;
   }

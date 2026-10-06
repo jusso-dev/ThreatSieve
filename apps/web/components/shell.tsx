@@ -28,6 +28,7 @@ import {
   FileText,
   Workflow,
   ScanEye,
+  Activity,
 } from "lucide-react";
 import { AccessContext } from "@/lib/access";
 import { authClient, authResult } from "@/lib/auth";
@@ -52,6 +53,7 @@ const navigation = [
   { name: "Bulk analysis", href: "/bulk", icon: Upload },
   { name: "Team & access", href: "/team", icon: Users },
   { name: "Your environment", href: "/inventory", icon: Boxes },
+  { name: "System health", href: "/system", icon: Activity, scope: "ops:read" },
 ];
 export function Shell({ children }: { children: React.ReactNode }) {
   const path = usePathname();
@@ -252,35 +254,42 @@ function WorkspaceShell({ children }: { children: React.ReactNode }) {
         </button>
         <div className="nav-label">WORKSPACE</div>
         <nav>
-          {navigation.map((item) => (
-            <Link
-              key={item.href}
-              href={item.href}
-              onClick={() => setOpen(false)}
-              aria-current={
-                path === item.href ||
-                (item.href !== "/" && path.startsWith(item.href + "/")) ||
-                (item.href === "/intelligence" &&
-                  path.startsWith("/intelligence/"))
-                  ? "page"
-                  : undefined
-              }
-              className={
-                "nav-link " +
-                (path === item.href ||
-                (item.href !== "/" && path.startsWith(item.href + "/")) ||
-                (item.href === "/" && path.startsWith("/investigations")) ||
-                (item.href === "/intelligence" &&
-                  path.startsWith("/intelligence/"))
-                  ? "active"
-                  : "")
-              }
-            >
-              <item.icon size={18} />
-              {item.name}
-              {item.href === "/" && <span className="nav-indicator" />}
-            </Link>
-          ))}
+          {navigation
+            .filter(
+              (item) =>
+                !item.scope ||
+                me.data?.scopes.includes("admin") ||
+                me.data?.scopes.includes(item.scope),
+            )
+            .map((item) => (
+              <Link
+                key={item.href}
+                href={item.href}
+                onClick={() => setOpen(false)}
+                aria-current={
+                  path === item.href ||
+                  (item.href !== "/" && path.startsWith(item.href + "/")) ||
+                  (item.href === "/intelligence" &&
+                    path.startsWith("/intelligence/"))
+                    ? "page"
+                    : undefined
+                }
+                className={
+                  "nav-link " +
+                  (path === item.href ||
+                  (item.href !== "/" && path.startsWith(item.href + "/")) ||
+                  (item.href === "/" && path.startsWith("/investigations")) ||
+                  (item.href === "/intelligence" &&
+                    path.startsWith("/intelligence/"))
+                    ? "active"
+                    : "")
+                }
+              >
+                <item.icon size={18} />
+                {item.name}
+                {item.href === "/" && <span className="nav-indicator" />}
+              </Link>
+            ))}
         </nav>
         <div className="sidebar-bottom">
           <div className="principle">
