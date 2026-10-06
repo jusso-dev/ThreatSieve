@@ -276,6 +276,8 @@ function WorkspaceShell({ children }: { children: React.ReactNode }) {
             <input
               ref={input}
               aria-label="Search intelligence"
+              disabled={me.loading}
+              aria-busy={me.loading}
               placeholder="Search IP, domain, hash, CVE…"
               value={query}
               onChange={(e) => setQuery(e.target.value)}

@@ -282,3 +282,29 @@ test("stale analyst edits show the conflict inside the dialog and offer a reload
     page.getByRole("heading", { name: "beacon.demo.example", exact: true }),
   ).toBeVisible();
 });
+
+test("search waits for workspace permissions before accepting input", async ({
+  page,
+}) => {
+  let release!: () => void;
+  const permissionDelay = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  await page.route("**/api/v1/me", async (route) => {
+    await permissionDelay;
+    await route.continue();
+  });
+  try {
+    await page.goto("/");
+    const search = page.getByRole("textbox", { name: "Search intelligence" });
+    await expect(search).toBeDisabled();
+    release();
+    await expect(search).toBeEnabled();
+    await search.fill("DemoRAT");
+    await expect(
+      page.getByRole("button", { name: /DemoRAT malware/ }),
+    ).toBeVisible();
+  } finally {
+    release();
+  }
+});
