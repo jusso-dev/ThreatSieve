@@ -105,3 +105,5 @@ The production workflow accepts a full commit SHA with a successful main-branch 
 After an account enables MFA, do not roll the API back to a release that lacks MFA enforcement. Prefer a forward fix or disable password sign-in at the edge while recovering. Additive migration rollback alone does not preserve second-factor protection.
 
 The tenant bootstrap CLI refuses to overwrite an existing one-time key file. Set `THREATSIEVE_CREDENTIALS_NAME=staging-tenant-credentials.local.json` when provisioning a separate staging workspace.
+
+On 7 October 2026, the public knowledge backfill and live filtered retrieval checks completed: 5,243 vectors are present in production. Semantic candidate retrieval is now enabled in staging and production, including the corresponding GitHub environment variable. The earlier disabled-state record above describes the 6 October deployment. See the readiness register for current deployed versions, acceptance results and outstanding operational dependencies.

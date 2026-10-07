@@ -44,11 +44,12 @@ Sync MITRE first, then MISP, then indicator feeds so canonical knowledge is avai
 - Source reliability ratings, tenant source policy, sync history, quarantined records and replay.
 - Event playbooks using the existing outbox/queues, with execution history and approved webhook delivery.
 - Tenant-authenticated TAXII 2.1 collection snapshots and MISP event exchange.
+- Asynchronous STIX collection packages with resumable queue processing, checksummed parts, access revalidation and temporary-copy expiry.
 - Six required source adapters with Zod validation, deterministic identities, source provenance and R2 archival.
-- D1 graph storage, actor aliases, bounded graph candidates and optional Vectorize retrieval.
+- D1 graph storage, actor aliases, bounded graph candidates and configurable Vectorize retrieval with batched public-knowledge indexing.
 - Clef-flash → confidence gate → Clef escalation. Full question distributions and candidate sets are retained.
 - Behaviour-gated ATT&CK mappings, conservative actor associations, structured confidence factors and customer relevance.
-- Better Auth accounts, verified email, team invitations, admin/analyst/viewer roles, password recovery, scoped API keys and tenant isolation.
+- Better Auth accounts, verified email, team invitations, admin/analyst/viewer roles, password recovery, authenticator MFA with single-use recovery codes, scoped API keys and tenant isolation.
 - Accessible toast notifications and actionable inline messages throughout analyst workflows.
 - Filterable analyst queue with server-side sorting, bookmarkable filters and personal saved triage views.
 - Intelligence library with source/category filters, canonical aliases and MITRE-ID search.

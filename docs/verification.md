@@ -21,3 +21,9 @@ The UI/security correction release passes 42 offline unit/integration tests and 
 Browser tests verify the full-document sidebar rail, mobile focus containment, native modal keyboard/Escape behavior, visible search failures, known-entity navigation without a classifier call, bulk retry keys, terminal polling and visible stale-feedback recovery. The repository screenshot has been updated from the running application.
 
 Strict TypeScript, ESLint, credential checks, dependency audit, evaluation calculation checks, API Worker/Next.js/OpenNext builds and independent parsing of a benign analyst-corrected STIX bundle pass. These are regression and integration checks; the deployment acceptance limitations above still apply.
+
+## Readiness verification — 7 October 2026
+
+The current release passed 208 distinct automated tests: 100 unit/integration, 87 full-stack end-to-end, eight browser regression and 13 Python connector/operations tests. Migration validation reruns the integration cases. [Application CI](https://github.com/jusso-dev/ThreatSieve/actions/runs/37605041612) also passed lint, strict TypeScript, build, security checks and evaluation self-checks. The Python dependency audit retains one documented upstream [advisory exception](dependency-security.md).
+
+Cloudflare staging and production are deployed. Live acceptance covered semantic candidate retrieval, conservative model routing, queued STIX package download/parser/checksum verification, authenticated operational probes and isolated D1/R2 restore drills. The [readiness register](readiness.md) records measured results and their limits, including the credentials, OpenCTI restore, real customer integrations, calibration and commercial decisions still outstanding. Historical limitations earlier in this document apply to their dated checks.
