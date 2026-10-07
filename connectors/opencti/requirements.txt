@@ -1,2 +1,3 @@
 pycti==7.261002.0
-requests>=2.34.2,<3
+# pycti 7.261002.0 requires Requests <2.34. Keep the security-fixed compatible line.
+requests>=2.33.1,<2.34.0

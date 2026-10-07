@@ -101,3 +101,7 @@ See the [current readiness register](readiness.md), [restore verification](recov
 Create the Vectorize metadata index before backfill: `wrangler vectorize create-metadata-index threatsieve-intel-staging --property-name entityType --type string` (use the production index for production). An administrator can queue `/v1/ops/vectorize/backfill` while retrieval is disabled and inspect `/v1/ops/vectorize`. Set `THREATSIEVE_VECTORIZE_ENABLED=true` only after coverage and live retrieval checks, and persist it in the matching GitHub environment for future releases.
 
 The production workflow accepts a full commit SHA with a successful main-branch CI run. The GitHub production environment restricts deployment to main and requires owner review. Automatic staging remains disabled until a dedicated, resource-scoped `CLOUDFLARE_API_TOKEN` is installed in GitHub; local Wrangler OAuth is never copied into CI secrets. Set `ENABLE_STAGING_DEPLOY=true` only after configuring that credential. Custom domains and their trusted auth origins require an explicitly selected domain.
+
+After an account enables MFA, do not roll the API back to a release that lacks MFA enforcement. Prefer a forward fix or disable password sign-in at the edge while recovering. Additive migration rollback alone does not preserve second-factor protection.
+
+The tenant bootstrap CLI refuses to overwrite an existing one-time key file. Set `THREATSIEVE_CREDENTIALS_NAME=staging-tenant-credentials.local.json` when provisioning a separate staging workspace.

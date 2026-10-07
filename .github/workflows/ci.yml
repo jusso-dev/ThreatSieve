@@ -31,6 +31,11 @@ jobs:
       - uses: actions/setup-python@v7
         with:
           python-version: "3.12"
+      - name: Resolve and validate OpenCTI dependencies
+        run: python -m pip install -r connectors/opencti/requirements.txt && python -m pip check
+      - name: Audit Python dependencies
+        # Upstream setuptools build-only exception: docs/dependency-security.md
+        run: python -m pip install pip-audit==2.10.1 && python -m pip_audit --ignore-vuln PYSEC-2026-3447
       - run: python -m py_compile connectors/opencti/connector.py infra/opencti/update.py infra/opencti/monitoring.py infra/opencti/host-health.py
       - run: python -m unittest discover -s tests/opencti -v
       - run: pnpm bootstrap
@@ -84,3 +89,4 @@ jobs:
           THREATSIEVE_D1_ID: ${{ vars.THREATSIEVE_D1_ID }}
           THREATSIEVE_WEB_ORIGIN: ${{ vars.THREATSIEVE_WEB_ORIGIN }}
           THREATSIEVE_API_ORIGIN: ${{ vars.THREATSIEVE_API_ORIGIN }}
+          THREATSIEVE_VECTORIZE_ENABLED: ${{ vars.THREATSIEVE_VECTORIZE_ENABLED }}
