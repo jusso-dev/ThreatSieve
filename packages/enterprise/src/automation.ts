@@ -67,19 +67,30 @@ export async function matchObject(
   change: Change,
 ) {
   if (!(await repo.intel.visible(repo.tenant, change.entity_id))) return null;
-  const d = await dossier(repo, change.entity_id);
   const direct =
     object.references.some(
-      (r) => r.type === "entity" && r.id === d.entity.id,
+      (r) => r.type === "entity" && r.id === change.entity_id,
     ) ||
     Boolean(
       await repo.db
         .prepare(
           "SELECT 1 FROM workspace_links WHERE tenant_id=? AND object_id=? AND target_type='entity' AND target_id=? AND relation IN ('member','automation_member')",
         )
-        .bind(repo.tenant, object.id, d.entity.id)
+        .bind(repo.tenant, object.id, change.entity_id)
         .first(),
     );
+  // Empty criteria cannot match a new entity. Curated references still match directly.
+  if (
+    !direct &&
+    !(
+      "criteria" in object &&
+      Object.values(object.criteria).some(
+        (v) => Array.isArray(v) && v.length > 0,
+      )
+    )
+  )
+    return null;
+  const d = await dossier(repo, change.entity_id);
   const criteria =
     "criteria" in object
       ? criterionMatches(
@@ -152,9 +163,21 @@ export async function processOperation(db: D1Database, job: PipelineJob) {
     }
     const rows = await db
       .prepare(
-        "SELECT id FROM entities e WHERE id>? AND (public_intel=1 OR EXISTS(SELECT 1 FROM tenant_observables t WHERE t.tenant_id=? AND t.observable_id=e.id)) ORDER BY id LIMIT 21",
+        "SELECT id FROM entities e WHERE id>? AND (public_intel=1 OR EXISTS(SELECT 1 FROM tenant_observables t WHERE t.tenant_id=? AND t.observable_id=e.id)) AND (?=1 OR e.id IN (SELECT json_extract(value,'$.id') FROM json_each(?) WHERE json_extract(value,'$.type')='entity') OR EXISTS(SELECT 1 FROM workspace_links WHERE tenant_id=? AND object_id=? AND target_type='entity' AND target_id=e.id AND relation IN ('member','automation_member'))) ORDER BY id LIMIT 21",
       )
-      .bind(cursor, job.tenantId)
+      .bind(
+        cursor,
+        job.tenantId,
+        Number(
+          "criteria" in object &&
+            Object.values(object.criteria).some(
+              (v) => Array.isArray(v) && v.length > 0,
+            ),
+        ),
+        JSON.stringify(object.references),
+        job.tenantId,
+        object.id,
+      )
       .all<{ id: string }>();
     for (const entity of rows.results.slice(0, 20)) {
       const eventId =

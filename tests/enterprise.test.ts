@@ -886,3 +886,34 @@ it("exports large collection snapshots asynchronously with tenant, license, revi
   ).toBeNull();
   expect(await a.intel.entity(ids[0]!)).toBeTruthy();
 });
+
+it("curated collections without matching criteria only backfill explicit members", async () => {
+  const { queueBackfill, processOperation } =
+    await import("../packages/enterprise/src/automation");
+  const entity = await normalise("curated-only.example");
+  await a.intel.putObservable(entity, p);
+  const collection = await a.save({
+    kind: "collection",
+    title: "Curated member scope",
+    status: "published",
+    references: [{ type: "entity", id: entity.id, relation: "member" }],
+  });
+  const id = await queueBackfill(a, collection);
+  const row = await db
+    .prepare("SELECT data FROM pipeline_jobs WHERE id=?")
+    .bind(id)
+    .first<{ data: string }>();
+  await processOperation(db, JSON.parse(row!.data));
+  const children = await db
+    .prepare(
+      "SELECT entity_id FROM pipeline_jobs WHERE tenant_id=? AND json_extract(data,'$.payload.objectId')=? AND json_extract(data,'$.payload.eventId') IS NOT NULL",
+    )
+    .bind(a.tenant, collection.id)
+    .all<{ entity_id: string }>();
+  expect(children.results.map((r) => r.entity_id)).toEqual([entity.id]);
+  const result = await db
+    .prepare("SELECT result FROM pipeline_jobs WHERE id=?")
+    .bind(id)
+    .first<{ result: string }>();
+  expect(JSON.parse(result!.result)).toMatchObject({ scanned: 1, more: false });
+});

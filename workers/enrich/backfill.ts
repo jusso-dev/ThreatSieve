@@ -25,6 +25,7 @@ export async function backfillVectors(env: AppEnv, job: PipelineJob) {
       ? {
           ...job,
           jobId: runId + ":page:" + (await digest(last!)),
+          createdAt: new Date().toISOString(),
           attempt: 0,
           generation: 0,
           payload: { mode: "vector-backfill", runId, cursor: last },
