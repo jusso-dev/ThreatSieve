@@ -1046,6 +1046,7 @@ it("semantic backfill indexes only public knowledge and repeats safely", async (
   const { backfillVectors } = await import("../workers/enrich/backfill");
   for (const [id, sourceId] of [
     ["vector-public", "mitre"],
+    ["vector-public-two", "mitre"],
     ["vector-private", "customer"],
   ])
     await repo.putEntity({
@@ -1057,32 +1058,11 @@ it("semantic backfill indexes only public knowledge and repeats safely", async (
       provenance: { ...provenance, sourceId: sourceId! },
       data: {},
     });
-  const runId = crypto.randomUUID();
-  const job = {
-    ...makeJob("enrich", "knowledge-index", undefined, {
-      mode: "vector-backfill",
-      runId,
-    }),
-    jobId: runId,
-  };
-  await repo.enqueue(job);
-  await backfillVectors({ DB: db } as AppEnv, job);
-  await backfillVectors({ DB: db } as AppEnv, job);
-  const children = await db
-    .prepare(
-      "SELECT entity_id FROM pipeline_jobs WHERE json_extract(data,'$.payload.runId')=? AND json_extract(data,'$.payload.mode')='vector-index'",
-    )
-    .bind(runId)
-    .all<{ entity_id: string }>();
-  expect(
-    children.results.filter((r) => r.entity_id === "vector-public"),
-  ).toHaveLength(1);
-  expect(children.results.some((r) => r.entity_id === "vector-private")).toBe(
-    false,
-  );
   const run = vi
     .fn()
-    .mockResolvedValue({ data: [Array.from({ length: 768 }, () => 0.1)] });
+    .mockImplementation(async (_model: string, input: { text: string[] }) => ({
+      data: input.text.map(() => Array.from({ length: 768 }, () => 0.1)),
+    }));
   const upsert = vi.fn().mockResolvedValue({ mutationId: "offline" });
   const env = {
     DB: db,
@@ -1090,6 +1070,29 @@ it("semantic backfill indexes only public knowledge and repeats safely", async (
     VECTOR_INDEX: { upsert },
     VECTORIZE_ENABLED: "false",
   } as unknown as AppEnv;
+  const runId = crypto.randomUUID();
+  const job = {
+    ...makeJob("enrich", "knowledge-index", undefined, {
+      mode: "vector-backfill",
+      runId,
+      cursor: "vector-",
+    }),
+    jobId: runId,
+  };
+  await repo.enqueue(job);
+  await backfillVectors(env, job);
+  await backfillVectors(env, job);
+  const indexed = await db
+    .prepare(
+      "SELECT entity_id FROM vector_versions WHERE entity_id LIKE 'vector-%' ORDER BY entity_id",
+    )
+    .all<{ entity_id: string }>();
+  expect(indexed.results.map((r) => r.entity_id)).toEqual([
+    "vector-public",
+    "vector-public-two",
+  ]);
+  expect(run.mock.calls[0]![1].text).toHaveLength(2);
+  expect(upsert.mock.calls[0]![0]).toHaveLength(2);
   expect((await enrichEntity(env, "vector-private", true)).embedded).toBe(
     false,
   );
