@@ -346,6 +346,11 @@ test("command palette opens with keyboard and routes to a real requirement form"
   screen,
 }) => {
   await browser.goto("/");
+  // Navigation can finish before React installs the global keyboard listener.
+  // This control becomes enabled only after the hydrated workspace loads access.
+  await expect(
+    screen.getByLabel("Search intelligence", { exact: true }),
+  ).toBeEnabled();
   await browser.keyboard.press("Control+k");
   await expect(screen.getByRole("heading", "Search & commands")).toBeVisible();
   await screen
