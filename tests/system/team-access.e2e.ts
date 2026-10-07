@@ -211,3 +211,58 @@ test("team management stays usable on mobile without horizontal overflow", async
     capture(await app.screenshot("team-mobile"), "docs/images/team-mobile.png");
   }
 });
+
+test("authenticator enrollment and second-factor sign-in protect the workspace", async ({
+  browser,
+  screen,
+  workspace,
+  app,
+}) => {
+  const { authenticatorCode } = await import("../totp");
+  await browser.goto("/security");
+  await screen.getByLabel("Current password").fill(workspace.password);
+  await screen.getByRole("button", "Set up authenticator").click();
+  await expect(screen.getByLabel("Authenticator setup key")).toBeVisible();
+  const secret = await browser.evaluate(
+    () => (document.querySelector("#setup-key") as HTMLInputElement).value,
+  );
+  await screen
+    .getByLabel("Authenticator code", { exact: true })
+    .fill(authenticatorCode(secret));
+  await screen.getByRole("button", "Verify authenticator").click();
+  await expect(
+    screen.getByRole("heading", "Save your recovery codes"),
+  ).toBeVisible();
+  await screen.getByRole("button", "I have saved my recovery codes").click();
+  await expect(
+    screen.getByRole("button", "Replace recovery codes"),
+  ).toBeVisible();
+  if (process.env.UPDATE_SCREENSHOTS === "1")
+    capture(
+      await app.screenshot("account-security"),
+      "docs/images/account-security.png",
+    );
+  await browser.evaluate(async () => {
+    await fetch("/api/auth/sign-out", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: "{}",
+    });
+    return null;
+  });
+  await browser.goto("/sign-in");
+  await screen.getByLabel("Work email").fill(workspace.email);
+  await screen.getByLabel("Password", { exact: true }).fill(workspace.password);
+  await screen.getByRole("button", "Sign in", { exact: true }).click();
+  await expect(
+    screen.getByRole("heading", "Verify your identity."),
+  ).toBeVisible();
+  expect(
+    await browser.evaluate(async () => (await fetch("/api/v1/me")).status),
+  ).toBe(401);
+  await screen
+    .getByLabel("Authenticator code", { exact: true })
+    .fill(authenticatorCode(secret));
+  await screen.getByRole("button", "Verify and sign in").click();
+  await expect(screen.getByRole("heading", "Your team")).toBeVisible();
+});

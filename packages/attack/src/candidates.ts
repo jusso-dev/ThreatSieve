@@ -146,6 +146,7 @@ export async function retrieveSemanticCandidates(
   bundle: EvidenceBundle,
   index: VectorizeIndex,
   embeddings: EmbeddingService,
+  tenantId: string,
 ) {
   const text = bundle.evidence
     .filter((e) => e.behavioural)
@@ -162,6 +163,15 @@ export async function retrieveSemanticCandidates(
   for (const hit of results.matches) {
     const id = hit.metadata?.entityId;
     if (typeof id !== "string" || hit.score < 0.7) continue;
+    // The shared semantic index may only contribute public knowledge. Recheck
+    // D1 instead of trusting index metadata or historical indexing policy.
+    const global = await repo.db
+      .prepare(
+        "SELECT public_intel FROM entities e WHERE id=? AND json_extract(data,'$.provenance.sourceId') NOT IN ('customer','upload') AND NOT EXISTS(SELECT 1 FROM tenant_source_policy p WHERE p.tenant_id=? AND p.source_id=json_extract(e.data,'$.provenance.sourceId') AND p.enabled=0)",
+      )
+      .bind(id, tenantId)
+      .first<{ public_intel: number }>();
+    if (!global?.public_intel) continue;
     const entity = await repo.entity(id);
     if (!entity) continue;
     const dest =

@@ -510,3 +510,56 @@ test("system health reports unavailable integrations honestly and refreshes", as
   expect(report.integrations).toHaveLength(0);
   expect(report.alerts.some((a) => a.code === "SCHEDULER_STALE")).toBe(true);
 });
+
+test("analysts prepare queued STIX packages with checksummed downloads", async ({
+  browser,
+  screen,
+  workspace,
+  app,
+}) => {
+  const collection = await create(workspace, "collections", {
+    title: "Demo analyst export package",
+    references: [
+      {
+        type: "assessment",
+        id: workspace.assessments[0]!.assessment_id,
+        relation: "member",
+      },
+    ],
+  });
+  await browser.goto("/collections/" + collection.id);
+  await screen
+    .getByRole("button", "Prepare STIX package", { exact: true })
+    .click();
+  await expect(
+    screen.getByRole("button", "Download manifest", { exact: true }),
+  ).toBeVisible({ timeout: 30000 });
+  await expect(
+    screen.getByRole("button", "Download part 1", { exact: false }),
+  ).toBeVisible();
+  const manifest = await browser.evaluate(async () => {
+    const response = await fetch(
+      location.origin +
+        "/api/v1/collections/" +
+        location.pathname.split("/").at(-1) +
+        "/packages",
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ requestId: crypto.randomUUID() }),
+      },
+    );
+    return {
+      status: response.status,
+      body: (await response.json()) as { id: string },
+    };
+  });
+  expect(manifest.status).toBe(202);
+  const foreign = await otherWorkspace({ seeded: false });
+  expect(
+    (await request(foreign, "/v1/collection-packages/" + manifest.body.id))
+      .status,
+  ).toBe(404);
+  if (process.env.UPDATE_SCREENSHOTS === "1")
+    capture(await app.screenshot("collection-export"), "collection-export");
+});

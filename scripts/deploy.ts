@@ -7,6 +7,10 @@ if (process.argv.includes("--help")) {
   process.exit(0);
 }
 const stage = process.argv.includes("--production") ? "production" : "staging";
+const configPath =
+  stage === "production"
+    ? "wrangler.deploy.local.json"
+    : "wrangler.staging.local.json";
 const databaseId = process.env.THREATSIEVE_D1_ID;
 const account = process.env.CLOUDFLARE_ACCOUNT_ID;
 const webOrigin = process.env.THREATSIEVE_WEB_ORIGIN;
@@ -46,6 +50,8 @@ config.name = "threatsieve-api-" + stage;
 config.account_id = account;
 config.vars.APP_ENV = stage;
 config.vars.WEB_ORIGIN = webOrigin;
+config.vars.VECTORIZE_ENABLED =
+  process.env.THREATSIEVE_VECTORIZE_ENABLED === "true" ? "true" : "false";
 if (process.env.THREATSIEVE_AUTH_EMAIL_FROM) {
   config.vars.AUTH_EMAIL_FROM = process.env.THREATSIEVE_AUTH_EMAIL_FROM;
   config.send_email[0]!.allowed_sender_addresses = [
@@ -62,18 +68,16 @@ for (const q of config.queues.consumers) {
   if (q.dead_letter_queue) q.dead_letter_queue += "-" + stage;
 }
 // Keep generated config at root so entrypoint and migration paths retain their meaning.
-writeFileSync("wrangler.deploy.local.json", JSON.stringify(config, null, 2));
+writeFileSync(configPath, JSON.stringify(config, null, 2));
 if (process.argv.includes("--config-only")) {
   console.log(
-    "Generated wrangler.deploy.local.json. Review and apply remote migrations before deployment.",
+    `Generated ${configPath}. Review and apply remote migrations before deployment.`,
   );
   process.exit(0);
 }
-execFileSync(
-  "pnpm",
-  ["exec", "wrangler", "deploy", "--config", "wrangler.deploy.local.json"],
-  { stdio: "inherit" },
-);
+execFileSync("pnpm", ["exec", "wrangler", "deploy", "--config", configPath], {
+  stdio: "inherit",
+});
 execFileSync(
   "pnpm",
   ["--filter", "@threatsieve/web", "exec", "opennextjs-cloudflare", "build"],
@@ -90,10 +94,7 @@ web.services = [
   { binding: "THREATSIEVE_API", service: config.name },
 ];
 mkdirSync("apps/web", { recursive: true });
-writeFileSync(
-  "apps/web/wrangler.deploy.local.json",
-  JSON.stringify(web, null, 2),
-);
+writeFileSync("apps/web/" + configPath, JSON.stringify(web, null, 2));
 execFileSync(
   "pnpm",
   [
@@ -103,7 +104,7 @@ execFileSync(
     "wrangler",
     "deploy",
     "--config",
-    "wrangler.deploy.local.json",
+    configPath,
   ],
   { stdio: "inherit" },
 );

@@ -485,3 +485,99 @@ it("demoting a member revokes their existing API keys and preserves the other te
     )?.revoked_at,
   ).toBeNull();
 });
+
+describe("Authenticator protection", () => {
+  it("requires verified enrollment, blocks password-only access, revokes old sessions and consumes recovery codes once", async () => {
+    const { authenticatorCode } = await import("./totp");
+    await seedUser("mfa", "mfa@example.com", "a");
+    const cookie = await signIn("mfa@example.com");
+    const older = await signIn("mfa@example.com");
+    const enrollment = await call(
+      "/auth/two-factor/enable",
+      { password },
+      cookie,
+    );
+    expect(enrollment.status).toBe(200);
+    const setup = (await enrollment.json()) as {
+      totpURI: string;
+      backupCodes: string[];
+    };
+    expect(
+      (
+        await db
+          .prepare("SELECT two_factor_enabled FROM users WHERE id='mfa'")
+          .first()
+      )?.two_factor_enabled,
+    ).toBe(0);
+    const stored = await db
+      .prepare(
+        "SELECT secret,backup_codes FROM auth_two_factor WHERE user_id='mfa'",
+      )
+      .first<{ secret: string; backup_codes: string }>();
+    expect(stored?.backup_codes).not.toContain(setup.backupCodes[0]);
+    const verified = await call(
+      "/auth/two-factor/verify-totp",
+      {
+        code: authenticatorCode(
+          new URL(setup.totpURI).searchParams.get("secret")!,
+        ),
+      },
+      cookie,
+    );
+    expect(verified.status, await verified.clone().text()).toBe(200);
+    expect((await call("/v1/me", undefined, older)).status).toBe(401);
+    const challenge = await call("/auth/sign-in/email", {
+      email: "mfa@example.com",
+      password,
+    });
+    expect(await challenge.json()).toMatchObject({ twoFactorRedirect: true });
+    const challengeCookie = challenge.headers
+      .getSetCookie()
+      .map((c) => c.split(";")[0])
+      .join("; ");
+    expect((await call("/v1/me", undefined, challengeCookie)).status).toBe(401);
+    expect(
+      (
+        await call(
+          "/auth/two-factor/verify-totp",
+          { code: "not-a-code" },
+          challengeCookie,
+        )
+      ).status,
+    ).toBeGreaterThanOrEqual(400);
+    const recovered = await call(
+      "/auth/two-factor/verify-backup-code",
+      { code: setup.backupCodes[0], trustDevice: false },
+      challengeCookie,
+    );
+    expect(recovered.status, await recovered.clone().text()).toBe(200);
+    const signedCookie = recovered.headers
+      .getSetCookie()
+      .map((c) => c.split(";")[0])
+      .join("; ");
+    expect((await call("/v1/me", undefined, signedCookie)).status).toBe(200);
+    const second = await call("/auth/sign-in/email", {
+      email: "mfa@example.com",
+      password,
+    });
+    const secondCookie = second.headers
+      .getSetCookie()
+      .map((c) => c.split(";")[0])
+      .join("; ");
+    expect(
+      (
+        await call(
+          "/auth/two-factor/verify-backup-code",
+          { code: setup.backupCodes[0] },
+          secondCookie,
+        )
+      ).status,
+    ).toBeGreaterThanOrEqual(400);
+    const events = await db
+      .prepare("SELECT action FROM audit_events WHERE actor_id='mfa'")
+      .all();
+    expect(
+      events.results.some((e) => e.action === "two-factor/verify-backup-code"),
+    ).toBe(true);
+  });
+});

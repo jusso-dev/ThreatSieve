@@ -1,23 +1,39 @@
 name: Protected production release
 on:
   workflow_dispatch:
+    inputs:
+      commit:
+        description: "Full commit SHA with a successful Validate and stage run on main"
+        required: true
+        type: string
 permissions:
   contents: read
+  actions: read
 jobs:
   production:
+    if: github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     environment: production
     timeout-minutes: 25
     steps:
-      - uses: actions/checkout@v4
-      - uses: pnpm/action-setup@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ inputs.commit }}
+      - name: Require validated main commit
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_SHA: ${{ inputs.commit }}
+        run: |
+          test "$RELEASE_SHA" = "$(git rev-parse HEAD)"
+          gh api "repos/${{ github.repository }}/actions/workflows/ci.yml/runs?head_sha=$RELEASE_SHA&branch=main&status=success" --jq '.workflow_runs | any(.event == "push")' | grep -qx true
+      - uses: pnpm/action-setup@v6
+      - uses: actions/setup-node@v7
         with:
           node-version: 22
           cache: pnpm
       - run: pnpm install --frozen-lockfile
       - run: pnpm lint && pnpm typecheck && pnpm test && pnpm security && pnpm build
-      - run: pnpm deploy --production
+      - run: pnpm run deploy --production
         env:
           THREATSIEVE_PRODUCTION_RELEASE: approved
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
@@ -25,3 +41,4 @@ jobs:
           THREATSIEVE_D1_ID: ${{ vars.THREATSIEVE_D1_ID }}
           THREATSIEVE_WEB_ORIGIN: ${{ vars.THREATSIEVE_WEB_ORIGIN }}
           THREATSIEVE_API_ORIGIN: ${{ vars.THREATSIEVE_API_ORIGIN }}
+          THREATSIEVE_VECTORIZE_ENABLED: ${{ vars.THREATSIEVE_VECTORIZE_ENABLED }}

@@ -1040,3 +1040,114 @@ describe("saved view ownership and limits", () => {
     expect(second.next_cursor).toBeNull();
   });
 });
+
+it("semantic backfill indexes only public knowledge and repeats safely", async () => {
+  const { enrichEntity } = await import("../workers/enrich/index");
+  const { backfillVectors } = await import("../workers/enrich/backfill");
+  for (const [id, sourceId] of [
+    ["vector-public", "mitre"],
+    ["vector-private", "customer"],
+  ])
+    await repo.putEntity({
+      id: id!,
+      type: "attack-technique",
+      name: "Synthetic indexing case",
+      description: "Synthetic observed command execution",
+      aliases: [],
+      provenance: { ...provenance, sourceId: sourceId! },
+      data: {},
+    });
+  const runId = crypto.randomUUID();
+  const job = {
+    ...makeJob("enrich", "knowledge-index", undefined, {
+      mode: "vector-backfill",
+      runId,
+    }),
+    jobId: runId,
+  };
+  await repo.enqueue(job);
+  await backfillVectors({ DB: db } as AppEnv, job);
+  await backfillVectors({ DB: db } as AppEnv, job);
+  const children = await db
+    .prepare(
+      "SELECT entity_id FROM pipeline_jobs WHERE json_extract(data,'$.payload.runId')=? AND json_extract(data,'$.payload.mode')='vector-index'",
+    )
+    .bind(runId)
+    .all<{ entity_id: string }>();
+  expect(
+    children.results.filter((r) => r.entity_id === "vector-public"),
+  ).toHaveLength(1);
+  expect(children.results.some((r) => r.entity_id === "vector-private")).toBe(
+    false,
+  );
+  const run = vi
+    .fn()
+    .mockResolvedValue({ data: [Array.from({ length: 768 }, () => 0.1)] });
+  const upsert = vi.fn().mockResolvedValue({ mutationId: "offline" });
+  const env = {
+    DB: db,
+    AI: { run },
+    VECTOR_INDEX: { upsert },
+    VECTORIZE_ENABLED: "false",
+  } as unknown as AppEnv;
+  expect((await enrichEntity(env, "vector-private", true)).embedded).toBe(
+    false,
+  );
+  expect((await enrichEntity(env, "vector-public", true)).embedded).toBe(true);
+  expect((await enrichEntity(env, "vector-public", true)).cached).toBe(true);
+  expect(run).toHaveBeenCalledTimes(1);
+  expect(upsert).toHaveBeenCalledTimes(1);
+  const { retrieveSemanticCandidates } =
+    await import("../packages/attack/src/candidates");
+  const observable = await normalise("vector-test.example");
+  await repo.putObservable(observable, provenance);
+  await repo.putEvidence(observable.id, {
+    id: "vector-behaviour",
+    type: "telemetry",
+    sourceId: "mitre",
+    provenance,
+    data: { description: "Synthetic observed command execution" },
+    confidence: 0.9,
+    behavioural: true,
+    createdAt: new Date().toISOString(),
+  });
+  const sample = await buildEvidenceBundle(repo, "tenant-a", observable.id);
+  sample.attackCandidates = [];
+  const index = {
+    query: vi.fn().mockResolvedValue({
+      matches: [
+        { score: 0.99, metadata: { entityId: "vector-private" } },
+        { score: 0.95, metadata: { entityId: "vector-public" } },
+      ],
+    }),
+  } as unknown as VectorizeIndex;
+  await retrieveSemanticCandidates(
+    repo,
+    sample,
+    index,
+    { embed: async () => [0.1] },
+    "tenant-a",
+  );
+  expect(sample.attackCandidates.map((c) => c.id)).toEqual(["vector-public"]);
+  await db
+    .prepare(
+      "INSERT INTO tenant_source_policy VALUES(?,'mitre',0,'Semantic policy test',?)",
+    )
+    .bind("tenant-a", new Date().toISOString())
+    .run();
+  sample.attackCandidates = [];
+  await retrieveSemanticCandidates(
+    repo,
+    sample,
+    index,
+    { embed: async () => [0.1] },
+    "tenant-a",
+  );
+  expect(sample.attackCandidates).toHaveLength(0);
+  await db
+    .prepare(
+      "DELETE FROM tenant_source_policy WHERE tenant_id=? AND source_id='mitre'",
+    )
+    .bind("tenant-a")
+    .run();
+});

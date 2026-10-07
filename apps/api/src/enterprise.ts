@@ -1,3 +1,9 @@
+import {
+  getPackage,
+  requestPackage,
+} from "../../../packages/enterprise/src/packages";
+import { digest } from "../../../packages/intel/src/normalise";
+import { WorkObjectSchema } from "../../../packages/schemas/src/enterprise";
 import { integrationTargets } from "../../../packages/enterprise/src/integrations";
 import { taxiiRoutes } from "./taxii";
 import { publishCollection } from "../../../packages/enterprise/src/taxii";
@@ -334,6 +340,174 @@ routes.get("/workspace/references", async (c) => {
 routes.get("/evidence/:id", async (c) =>
   c.json(await repo(c).evidence(c.req.param("id"))),
 );
+routes.post("/collections/:id/packages", async (c) => {
+  const input = z
+    .object({ requestId: z.string().uuid() })
+    .parse(await enterpriseJson(c));
+  const id = await requestPackage(
+    repo(c),
+    c.req.param("id"),
+    input.requestId,
+    c.get("requestId"),
+  );
+  return c.json({ id, status_url: "/v1/collection-packages/" + id }, 202);
+});
+routes.get("/collection-packages/:id", async (c) => {
+  const r = repo(c),
+    row = await getPackage(r, c.req.param("id"));
+  const parts = await r.db
+    .prepare(
+      "SELECT part,sha256,object_count,created_at FROM collection_package_parts WHERE tenant_id=? AND package_id=? AND object_count>0 ORDER BY part",
+    )
+    .bind(r.tenant, row.id)
+    .all();
+  const count = await r.db
+    .prepare(
+      "SELECT COUNT(*) AS n FROM collection_package_members WHERE tenant_id=? AND package_id=?",
+    )
+    .bind(r.tenant, row.id)
+    .first<{ n: number }>();
+  const failed = await r.db
+    .prepare(
+      "SELECT id,status,error_type FROM pipeline_jobs WHERE tenant_id=? AND json_extract(data,'$.payload.packageId')=? AND status IN ('failed','dead-letter') LIMIT 1",
+    )
+    .bind(r.tenant, row.id)
+    .first();
+  return c.json({
+    schema_version: "1.0",
+    id: row.id,
+    collection_id: row.collection_id,
+    revision: row.revision,
+    status: failed ? "failed" : row.status,
+    matched_entities: count?.n ?? 0,
+    created_at: row.created_at,
+    expires_at: row.expires_at,
+    parts: parts.results,
+    failed_job: failed,
+    semantics:
+      "Membership is snapshotted at request time. Redistributable content is captured while processing; current access and collection revision are checked on every download. Parts form one STIX package and may reference objects in other parts.",
+  });
+});
+routes.get("/collection-packages/:id/parts/:part", async (c) => {
+  const r = repo(c),
+    row = await getPackage(r, c.req.param("id")),
+    part = z.coerce
+      .number()
+      .int()
+      .min(0)
+      .max(100000)
+      .parse(c.req.param("part"));
+  if (row.status !== "complete")
+    throw new AppError(
+      "EXPORT_PENDING",
+      409,
+      "This package is still processing. Wait until all parts are ready.",
+    );
+  const record = await r.db
+    .prepare(
+      "SELECT r2_key,sha256,member_ids FROM collection_package_parts WHERE tenant_id=? AND package_id=? AND part=?",
+    )
+    .bind(r.tenant, row.id, part)
+    .first<{ r2_key: string; sha256: string; member_ids: string }>();
+  if (!record)
+    throw new AppError("NOT_FOUND", 404, "This export part is unavailable.");
+  for (const id of z
+    .array(z.string())
+    .max(100)
+    .parse(JSON.parse(record.member_ids))) {
+    const entity = await r.intel.entity(id);
+    const denied =
+      entity &&
+      (await r.db
+        .prepare(
+          "SELECT 1 FROM tenant_source_policy WHERE tenant_id=? AND source_id=? AND enabled=0",
+        )
+        .bind(r.tenant, entity.provenance.sourceId)
+        .first());
+    if (
+      !entity?.provenance.redistributable ||
+      denied ||
+      !(await r.intel.visible(r.tenant, id))
+    )
+      throw new AppError(
+        "EXPORT_ACCESS_CHANGED",
+        409,
+        "Access or redistribution rights changed. Create a new export package.",
+      );
+  }
+  const archived = await c.env.ARCHIVE.get(record.r2_key);
+  if (!archived)
+    throw new AppError(
+      "EXPORT_UNAVAILABLE",
+      503,
+      "This export part is temporarily unavailable. Please retry.",
+    );
+  const body = await archived.text();
+  if ((await digest(body)) !== record.sha256)
+    throw new AppError(
+      "EXPORT_INTEGRITY",
+      503,
+      "This export failed its integrity check. Please create a new package.",
+    );
+  if (part === 0) {
+    const snapshot = WorkObjectSchema.parse(JSON.parse(row.snapshot));
+    const current = await exportWorkspace(
+      r,
+      {
+        ...snapshot,
+        references: snapshot.references.filter(
+          (ref) => ref.type === "assessment",
+        ),
+      },
+      new Set(),
+      false,
+    );
+    if (
+      JSON.stringify(current.objects) !==
+      JSON.stringify(JSON.parse(body).objects)
+    )
+      throw new AppError(
+        "EXPORT_ASSESSMENT_CHANGED",
+        409,
+        "An assessment changed. Create a new export package.",
+      );
+  }
+  const bundle = z
+    .object({ objects: z.array(z.record(z.string(), z.unknown())) })
+    .parse(JSON.parse(body));
+  for (const edge of bundle.objects.filter(
+    (o) =>
+      o.type === "relationship" &&
+      typeof o.x_threatsieve_relationship_id === "string",
+  )) {
+    const blocked = await r.db
+      .prepare(
+        "SELECT 1 FROM relationships r WHERE r.id=? AND (EXISTS(SELECT 1 FROM tenant_source_policy WHERE tenant_id=? AND source_id=r.source_id AND enabled=0) OR COALESCE((SELECT decision FROM relationship_feedback WHERE tenant_id=? AND relationship_id=r.id ORDER BY created_at DESC,id DESC LIMIT 1),'confirm')='reject' OR json_extract(r.data,'$.provenance.redistributable')!=1)",
+      )
+      .bind(edge.x_threatsieve_relationship_id, r.tenant, r.tenant)
+      .first();
+    if (blocked)
+      throw new AppError(
+        "EXPORT_RELATIONSHIP_CHANGED",
+        409,
+        "A relationship was rejected or restricted. Create a new export package.",
+      );
+  }
+  await r.intel.audit(
+    r.principal,
+    "collection.package.downloaded",
+    row.id,
+    c.get("requestId"),
+    { part },
+  );
+  c.header("Cache-Control", "private, no-store");
+  c.header("Content-Type", "application/stix+json");
+  c.header(
+    "Content-Disposition",
+    `attachment; filename="threatsieve-${row.id}-${part}.json"`,
+  );
+  return c.body(body);
+});
 for (const [path, kind] of Object.entries({
   requirements: "requirement",
   investigations: "investigation",

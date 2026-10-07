@@ -2,20 +2,41 @@ import { z } from "zod";
 import type { AppEnv } from "../../apps/api/src/env";
 import { Repository } from "../../packages/database/src/repository";
 import { digest } from "../../packages/intel/src/normalise";
-export async function enrichEntity(env: AppEnv, entityId: string) {
+export async function enrichEntity(
+  env: AppEnv,
+  entityId: string,
+  indexing = false,
+) {
   const repo = new Repository(env.DB);
   const entity = await repo.entity(entityId);
   if (!entity) throw new Error("Entity not found");
   const text = entity.description.slice(0, 6000);
   if (
-    env.VECTORIZE_ENABLED !== "true" ||
+    (!indexing && env.VECTORIZE_ENABLED !== "true") ||
     !text ||
     !["attack-technique", "threat-actor", "malware", "campaign"].includes(
       entity.type,
     )
   )
     return { strategy: "graph-context", embedded: false };
-  const version = await digest(text);
+  const global = await env.DB.prepare(
+    "SELECT public_intel FROM entities WHERE id=?",
+  )
+    .bind(entityId)
+    .first<{ public_intel: number }>();
+  if (
+    !global?.public_intel ||
+    ["customer", "upload"].includes(entity.provenance.sourceId)
+  )
+    return { strategy: "private-graph-context", embedded: false };
+  const version = await digest(
+    JSON.stringify({
+      text,
+      model: "@cf/baai/bge-base-en-v1.5",
+      type: entity.type,
+      source: entity.provenance.sourceId,
+    }),
+  );
   const previous = await env.DB.prepare(
     "SELECT evidence_version FROM vector_versions WHERE entity_id=?",
   )

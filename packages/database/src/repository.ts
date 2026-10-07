@@ -651,7 +651,11 @@ export class Repository {
   async enqueue(job: PipelineJob) {
     await this.db.batch(this.jobStatements(job));
   }
-  async finish(job: PipelineJob, result: unknown, next?: PipelineJob) {
+  async finish(
+    job: PipelineJob,
+    result: unknown,
+    next?: PipelineJob | PipelineJob[],
+  ) {
     const statements = [
       this.db
         .prepare(
@@ -664,9 +668,9 @@ export class Repository {
           job.generation ?? 0,
         ),
     ];
-    if (next)
+    for (const child of next ? (Array.isArray(next) ? next : [next]) : [])
       statements.push(
-        ...this.jobStatements(next, {
+        ...this.jobStatements(child, {
           delivery: { id: job.jobId, generation: job.generation ?? 0 },
         }),
       );

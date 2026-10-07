@@ -24,6 +24,9 @@ export function AuthForm({ mode }: { mode: Mode }) {
   const [sent, setSent] = useState(false);
   const [returnTo, setReturnTo] = useState("/team");
   const [token, setToken] = useState("");
+  const [challenge, setChallenge] = useState(false);
+  const [recovery, setRecovery] = useState(false);
+  const [code, setCode] = useState("");
   useEffect(() => {
     setReturnTo(invitationReturn());
     const query = new URLSearchParams(window.location.search);
@@ -43,15 +46,23 @@ export function AuthForm({ mode }: { mode: Mode }) {
           ThreatSieve<span className="brand-period">.</span>
         </Link>
         <div className="eyebrow">YOUR TEAM. YOUR INTELLIGENCE.</div>
-        <h1>{sent ? "Check your inbox." : headings[mode]}</h1>
+        <h1>
+          {challenge
+            ? "Verify your identity."
+            : sent
+              ? "Check your inbox."
+              : headings[mode]}
+        </h1>
         <p>
-          {sent
-            ? mode === "sign-up"
-              ? "Verify your email using the link we sent, then accept your team invitation."
-              : "If an account exists for this address, we’ve sent a password-reset link. Check your spam folder too."
-            : mode === "forgot-password"
-              ? "Enter your work email and we’ll send you a secure reset link."
-              : "Evidence-backed decisions start with a secure workspace."}
+          {challenge
+            ? "Enter a code from your authenticator app, or use one of your saved recovery codes."
+            : sent
+              ? mode === "sign-up"
+                ? "Verify your email using the link we sent, then accept your team invitation."
+                : "If an account exists for this address, we’ve sent a password-reset link. Check your spam folder too."
+              : mode === "forgot-password"
+                ? "Enter your work email and we’ll send you a secure reset link."
+                : "Evidence-backed decisions start with a secure workspace."}
         </p>
         {sent ? (
           <div className="auth-sent">
@@ -79,15 +90,43 @@ export function AuthForm({ mode }: { mode: Mode }) {
               }
               setBusy(true);
               try {
-                if (mode === "sign-in") {
+                if (challenge) {
                   await authResult(
+                    recovery
+                      ? authClient.twoFactor.verifyBackupCode({
+                          code,
+                          trustDevice: false,
+                        })
+                      : authClient.twoFactor.verifyTotp({
+                          code,
+                          trustDevice: false,
+                        }),
+                    "Identity verified. You’re signed in.",
+                  );
+                  setCode("");
+                  router.push(returnTo);
+                  return;
+                }
+                if (mode === "sign-in") {
+                  const result = await authResult(
                     authClient.signIn.email({
                       email,
                       password,
                       callbackURL: window.location.origin + returnTo,
                     }),
-                    "Welcome back. You’re signed in.",
                   );
+                  setPassword("");
+                  if (
+                    "twoFactorRedirect" in result &&
+                    result.twoFactorRedirect
+                  ) {
+                    setChallenge(true);
+                    toast.info(
+                      "Enter your authenticator code to finish signing in.",
+                    );
+                    return;
+                  }
+                  toast.success("Welcome back. You’re signed in.");
                   router.push(returnTo);
                 }
                 if (mode === "sign-up") {
@@ -141,7 +180,36 @@ export function AuthForm({ mode }: { mode: Mode }) {
                 />
               </>
             )}
-            {mode !== "reset-password" && (
+            {challenge && (
+              <>
+                <label htmlFor="mfa-code">
+                  {recovery ? "Recovery code" : "Authenticator code"}
+                </label>
+                <input
+                  id="mfa-code"
+                  autoComplete="one-time-code"
+                  inputMode={recovery ? "text" : "numeric"}
+                  required
+                  autoFocus
+                  maxLength={recovery ? 40 : 6}
+                  pattern={recovery ? undefined : "[0-9]{6}"}
+                  value={code}
+                  onChange={(e) => setCode(e.target.value.trim())}
+                />
+                <button
+                  type="button"
+                  className="text-link"
+                  onClick={() => {
+                    setRecovery(!recovery);
+                    setCode("");
+                    setError("");
+                  }}
+                >
+                  {recovery ? "Use authenticator app" : "Use a recovery code"}
+                </button>
+              </>
+            )}
+            {!challenge && mode !== "reset-password" && (
               <>
                 <label htmlFor="email">Work email</label>
                 <input
@@ -155,7 +223,7 @@ export function AuthForm({ mode }: { mode: Mode }) {
                 />
               </>
             )}
-            {mode !== "forgot-password" && (
+            {!challenge && mode !== "forgot-password" && (
               <>
                 <label htmlFor="password">
                   {mode === "reset-password" ? "New password" : "Password"}
@@ -200,13 +268,15 @@ export function AuthForm({ mode }: { mode: Mode }) {
             <Button disabled={busy || (mode === "reset-password" && !token)}>
               {busy
                 ? "Please wait…"
-                : mode === "sign-in"
-                  ? "Sign in"
-                  : mode === "sign-up"
-                    ? "Create account"
-                    : mode === "forgot-password"
-                      ? "Send reset link"
-                      : "Save new password"}
+                : challenge
+                  ? "Verify and sign in"
+                  : mode === "sign-in"
+                    ? "Sign in"
+                    : mode === "sign-up"
+                      ? "Create account"
+                      : mode === "forgot-password"
+                        ? "Send reset link"
+                        : "Save new password"}
               <ArrowRight size={15} />
             </Button>
           </form>

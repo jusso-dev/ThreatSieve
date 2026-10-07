@@ -1,12 +1,21 @@
 "use client";
 import { createAuthClient } from "better-auth/react";
-import { organizationClient } from "better-auth/client/plugins";
+import {
+  organizationClient,
+  twoFactorClient,
+} from "better-auth/client/plugins";
 import { toast } from "sonner";
 import { ac, roles } from "../../../packages/auth/src/roles";
 export const authClient = createAuthClient({
-  plugins: [organizationClient({ ac, roles })],
+  plugins: [organizationClient({ ac, roles }), twoFactorClient()],
 });
 const messages: Record<string, string> = {
+  INVALID_TWO_FACTOR_COOKIE:
+    "Your verification session expired. Sign in again.",
+  INVALID_CODE:
+    "That code didn’t match. Check your authenticator and try again.",
+  INVALID_BACKUP_CODE:
+    "That recovery code is invalid or has already been used.",
   EMAIL_UNAVAILABLE:
     "We couldn’t send the email. Try again shortly. For a pending invitation, use Resend.",
   INVALID_EMAIL_OR_PASSWORD:

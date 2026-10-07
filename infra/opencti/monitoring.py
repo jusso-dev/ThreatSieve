@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Configure host-scoped CloudWatch metrics/alarms. No paging or automated EC2 actions."""
+"""Configure host alarms, optionally routing transitions to an approved SNS topic."""
 import argparse
 import json
 import re
@@ -8,12 +8,23 @@ import tempfile
 import time
 
 
+def notification_actions(topic, region, existing):
+    if topic:
+        if not re.fullmatch(r'arn:aws:sns:' + re.escape(region) + r':\d{12}:[A-Za-z0-9_-]{1,256}', topic):
+            raise ValueError('Use an SNS topic ARN in the host region')
+        return {'AlarmActions': [topic], 'OKActions': [topic], 'InsufficientDataActions': []}
+    # Re-running monitoring setup must not silently remove configured paging.
+    return {key: existing.get(key, []) for key in ('AlarmActions', 'OKActions', 'InsufficientDataActions')}
+
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument('--region', required=True)
     parser.add_argument('--instance-id', required=True)
     parser.add_argument('--role', required=True)
+    parser.add_argument('--alarm-topic-arn', help='Existing SNS topic with explicitly approved subscribers')
     args = parser.parse_args()
+    notification_actions(args.alarm_topic_arn, args.region, {})
     if not re.fullmatch(r'[a-z]{2}(?:-[a-z]+)+-\d', args.region) or not re.fullmatch(r'i-[0-9a-f]{17}', args.instance_id) or not re.fullmatch(r'[\w+=,.@-]{1,64}', args.role):
         raise ValueError('Invalid AWS identifiers')
 
@@ -21,9 +32,10 @@ def main():
         with tempfile.NamedTemporaryFile(mode='w', suffix='.json') as file:
             json.dump(document, file)
             file.flush()
-            result = subprocess.run(['aws', '--region', args.region, service, operation, flag, 'file://' + file.name, *extra], capture_output=True, text=True)
+            result = subprocess.run(['aws', '--region', args.region, service, operation, flag, 'file://' + file.name, *extra, '--output', 'json'], capture_output=True, text=True)
             if result.returncode:
                 raise RuntimeError('AWS operation failed: ' + service + ' ' + operation)
+            return json.loads(result.stdout) if result.stdout.strip() else {}
 
     namespace = 'ThreatSieve/OpenCTI'
     call('iam', 'put-role-policy', {
@@ -41,6 +53,7 @@ def main():
         ('CPUUtilization', 90, 'GreaterThanThreshold', 'missing', 'AWS/EC2'),
     ]
     prefix = 'threatsieve-opencti-production-'
+    existing = {alarm['AlarmName']: alarm for alarm in call('cloudwatch', 'describe-alarms', {'AlarmNames': [prefix + item[0] for item in alarms]}).get('MetricAlarms', [])}
     for name, threshold, comparison, missing, ns in alarms:
         call('cloudwatch', 'put-metric-alarm', {
             'AlarmName': prefix + name, 'AlarmDescription': 'OpenCTI host health; inspect the host before remediation. No automatic resource actions.',
@@ -48,7 +61,7 @@ def main():
             'Statistic': 'Minimum' if comparison == 'LessThanThreshold' else 'Maximum',
             'Period': 60, 'EvaluationPeriods': 5, 'DatapointsToAlarm': 3,
             'Threshold': threshold, 'ComparisonOperator': comparison, 'TreatMissingData': missing,
-            'ActionsEnabled': True, 'AlarmActions': [], 'OKActions': [], 'InsufficientDataActions': [],
+            'ActionsEnabled': True, **notification_actions(args.alarm_topic_arn, args.region, existing.get(prefix + name, {})),
             'Tags': [{'Key': 'Application', 'Value': 'ThreatSieve'}],
         })
         time.sleep(0.4)
@@ -57,7 +70,7 @@ def main():
          'properties': {'title': name, 'region': args.region, 'period': 60,
                         'metrics': [[ns, name, 'InstanceId', args.instance_id]], 'stat': 'Maximum'}}
         for i, (name, _, _, _, ns) in enumerate(alarms)]})})
-    print('Configured seven host alarms and the ThreatSieve-OpenCTI dashboard; no notification destinations or automated actions.')
+    print('Configured seven host alarms and dashboard. Notification destinations ' + ('set to the supplied SNS topic.' if args.alarm_topic_arn else 'preserved.'))
 
 
 if __name__ == '__main__':

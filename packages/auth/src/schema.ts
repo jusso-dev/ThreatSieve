@@ -20,7 +20,19 @@ export const user = sqliteTable("users", {
   name: text("name").notNull(),
   emailVerified: integer("email_verified", { mode: "boolean" }).notNull(),
   image: text("image"),
+  twoFactorEnabled: integer("two_factor_enabled", { mode: "boolean" }).default(
+    false,
+  ),
   ...timestamps(),
+});
+export const twoFactor = sqliteTable("auth_two_factor", {
+  id: text("id").primaryKey(),
+  userId: text("user_id").notNull().unique(),
+  secret: text("secret").notNull(),
+  backupCodes: text("backup_codes").notNull(),
+  verified: integer("verified", { mode: "boolean" }).default(false),
+  failedVerificationCount: integer("failed_verification_count").default(0),
+  lockedUntil: date("locked_until"),
 });
 export const session = sqliteTable("auth_sessions", {
   id: text("id").primaryKey(),

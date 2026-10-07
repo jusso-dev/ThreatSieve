@@ -1,5 +1,6 @@
 import { betterAuth } from "better-auth/minimal";
 import { organization } from "better-auth/plugins/organization";
+import { twoFactor } from "better-auth/plugins/two-factor";
 import { APIError } from "better-auth/api";
 import { drizzleAdapter } from "@better-auth/drizzle-adapter";
 import { drizzle } from "drizzle-orm/d1";
@@ -114,6 +115,7 @@ export function createAuth(env: AppEnv, onEmailFailure?: () => void) {
         "/request-password-reset": { window: 60, max: 3 },
         "/send-verification-email": { window: 60, max: 3 },
         "/organization/invite-member": { window: 60, max: 10 },
+        "/two-factor/*": { window: 60, max: 5 },
       },
     },
     advanced: {
@@ -122,6 +124,23 @@ export function createAuth(env: AppEnv, onEmailFailure?: () => void) {
       ipAddress: { ipAddressHeaders: ["cf-connecting-ip"] },
     },
     databaseHooks: {
+      user: {
+        update: {
+          after: async (user, context) => {
+            // Enrollment rotates the current session afterwards. Invalidate every
+            // pre-enrollment session at the server, including API-driven setup.
+            if (
+              context?.path === "/two-factor/verify-totp" &&
+              "twoFactorEnabled" in user &&
+              user.twoFactorEnabled
+            ) {
+              await env.DB.prepare("DELETE FROM auth_sessions WHERE user_id=?")
+                .bind(user.id)
+                .run();
+            }
+          },
+        },
+      },
       session: {
         create: {
           before: async (session) => {
@@ -141,6 +160,14 @@ export function createAuth(env: AppEnv, onEmailFailure?: () => void) {
       },
     },
     plugins: [
+      twoFactor({
+        issuer: "ThreatSieve",
+        accountLockout: {
+          enabled: true,
+          maxFailedAttempts: 5,
+          durationSeconds: 900,
+        },
+      }),
       organization({
         ac,
         roles,

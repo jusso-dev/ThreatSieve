@@ -1,3 +1,4 @@
+import { cleanupPackages } from "../../../packages/enterprise/src/packages";
 import {
   operationalReport,
   recordMaintenanceHeartbeat,
@@ -178,6 +179,11 @@ app.on(["GET", "POST"], "/auth/*", async (c) => {
     const audited = [
       "sign-in/email",
       "sign-out",
+      "two-factor/enable",
+      "two-factor/disable",
+      "two-factor/verify-totp",
+      "two-factor/verify-backup-code",
+      "two-factor/generate-backup-codes",
       "organization/invite-member",
       "organization/cancel-invitation",
       "organization/accept-invitation",
@@ -1181,6 +1187,47 @@ app.get("/v1/exports/:id", scope("assessment:read"), async (c) => {
     },
   });
 });
+app.post("/v1/ops/vectorize/backfill", scope("admin"), async (c) => {
+  const runId = crypto.randomUUID();
+  const job = makeJob(
+    "enrich",
+    "knowledge-index",
+    undefined,
+    { mode: "vector-backfill", runId },
+    runId,
+  );
+  job.jobId = runId;
+  const repo = new Repository(c.env.DB);
+  await repo.enqueue(job);
+  await repo.audit(
+    c.get("principal"),
+    "vectorize.backfill",
+    runId,
+    c.get("requestId"),
+  );
+  await dispatchOutbox(c.env);
+  return c.json(
+    {
+      run_id: runId,
+      status: "queued",
+      retrieval_enabled: c.env.VECTORIZE_ENABLED === "true",
+    },
+    202,
+  );
+});
+app.get("/v1/ops/vectorize", scope("ops:read"), async (c) => {
+  const counts = await c.env.DB.prepare(
+    "SELECT COUNT(*) AS eligible, SUM(CASE WHEN v.entity_id IS NOT NULL THEN 1 ELSE 0 END) AS indexed FROM entities e LEFT JOIN vector_versions v ON v.entity_id=e.id WHERE e.public_intel=1 AND e.type IN ('attack-technique','threat-actor','malware','campaign') AND length(json_extract(e.data,'$.description'))>0",
+  ).first();
+  const jobs = await c.env.DB.prepare(
+    "SELECT status,COUNT(*) AS count FROM pipeline_jobs WHERE stage='enrich' AND json_extract(data,'$.payload.mode') IN ('vector-backfill','vector-index') GROUP BY status",
+  ).all();
+  return c.json({
+    retrieval_enabled: c.env.VECTORIZE_ENABLED === "true",
+    counts,
+    jobs: jobs.results,
+  });
+});
 app.get("/v1/ops/status", scope("ops:read"), async (c) =>
   c.json(await operationalReport(c.env, c.get("principal").tenantId)),
 );
@@ -1275,6 +1322,7 @@ export default {
         await env.DB.prepare("DELETE FROM rate_limits WHERE expires_at<?")
           .bind(Math.floor(Date.now() / 60000))
           .run();
+        await cleanupPackages(env);
         await recordMaintenanceHeartbeat(env);
       })(),
     );

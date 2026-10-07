@@ -7,6 +7,8 @@ const mutationMessage = (path: string) => {
   if (/\/tags$/.test(path)) return "Workspace tags updated.";
   if (/\/notes$/.test(path))
     return "Analyst entry saved to the decision history.";
+  if (/\/packages$/.test(path))
+    return "Export queued. Progress will appear here.";
   if (/\/publish$/.test(path)) return "Collection snapshot published to TAXII.";
   if (path === "v1/sightings") return "Sighting recorded in your workspace.";
   if (path.includes("/saved-views")) return "Saved views updated.";

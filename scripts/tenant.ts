@@ -1,4 +1,4 @@
-import { writeFileSync, mkdirSync } from "node:fs";
+import { writeFileSync, mkdirSync, existsSync } from "node:fs";
 import { execFileSync } from "node:child_process";
 import { digest } from "../packages/intel/src/normalise";
 async function main() {
@@ -8,6 +8,17 @@ async function main() {
   if (!name || !email || !email.includes("@"))
     throw new Error(
       'Usage: pnpm tenant:create "Organisation" admin@example.com [--remote]',
+    );
+  const credentialName =
+    process.env.THREATSIEVE_CREDENTIALS_NAME ?? "tenant-credentials.local.json";
+  if (!/^[a-z0-9_-]+\.local\.json$/.test(credentialName))
+    throw new Error(
+      "Credential filename must end in .local.json and contain only letters, digits, underscores or hyphens.",
+    );
+  const credentialPath = "artifacts/" + credentialName;
+  if (existsSync(credentialPath))
+    throw new Error(
+      "Credential file already exists. Choose a new THREATSIEVE_CREDENTIALS_NAME to preserve existing keys.",
     );
   const id = crypto.randomUUID();
   const userId = crypto.randomUUID();
@@ -44,12 +55,12 @@ async function main() {
     { stdio: "inherit" },
   );
   writeFileSync(
-    "artifacts/tenant-credentials.local.json",
+    credentialPath,
     JSON.stringify({ tenantId: id, apiKey: key }, null, 2),
-    { mode: 0o600 },
+    { mode: 0o600, flag: "wx" },
   );
   console.log(
-    "Tenant provisioned. One-time key saved to artifacts/tenant-credentials.local.json.",
+    "Tenant provisioned. One-time key saved to " + credentialPath + ".",
   );
 }
 main().catch((e) => {

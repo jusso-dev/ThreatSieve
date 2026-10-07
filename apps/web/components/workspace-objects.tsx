@@ -6,6 +6,7 @@ import {
   WorkspaceMatches,
   ExecutionHistory,
   CollectionPublication,
+  CollectionPackage,
   InvestigationGraph,
 } from "./workspace-activity";
 import { useState, useEffect } from "react";
@@ -584,6 +585,9 @@ export function WorkspaceDetail({ kind, id }: { kind: WorkKind; id: string }) {
             o.publication === "taxii" && (
               <CollectionPublication object={o} canWrite={canWrite} />
             )}
+          {o.kind === "collection" && (
+            <CollectionPackage object={o} canWrite={canWrite} />
+          )}
           <section className="work-section">
             <h2>Analyst notes & decisions</h2>
             <form

@@ -38,6 +38,7 @@ beforeAll(async () => {
     script: 'export default {fetch(){return new Response("ok")}}',
     compatibilityDate: "2026-08-06",
     d1Databases: ["DB"],
+    r2Buckets: ["ARCHIVE"],
   });
   db = await mf.getD1Database("DB");
   for (const f of readdirSync("migrations").sort())
@@ -708,4 +709,180 @@ it("exports source-backed entities and relationships with valid STIX external re
     "artifacts/enterprise-stix.json",
     JSON.stringify(bundle, null, 2),
   );
+});
+
+it("exports large collection snapshots asynchronously with tenant, license, revision and retry safeguards", async () => {
+  const { requestPackage, processPackage, getPackage, cleanupPackages } =
+    await import("../packages/enterprise/src/packages");
+  const { app } = await import("../apps/api/src/index");
+  const { digest } = await import("../packages/intel/src/normalise");
+  const archive = await mf.getR2Bucket("ARCHIVE");
+  const collection = await a.save({
+    kind: "collection",
+    title: "Synthetic large package",
+  });
+  const ids = Array.from(
+    { length: 107 },
+    (_, i) => "package-node-" + String(i).padStart(3, "0"),
+  );
+  for (const [i, id] of ids.entries()) {
+    await a.intel.putEntity({
+      id,
+      type: "malware",
+      name: "Synthetic package " + i,
+      description: "Synthetic export fixture",
+      aliases: [],
+      data: {},
+      provenance: {
+        ...p,
+        sourceId: i === 106 ? "customer" : "mitre",
+        redistributable: i !== 105,
+      },
+    });
+    await db
+      .prepare(
+        "INSERT INTO workspace_matches(tenant_id,object_id,entity_id,evidence_ids,criteria,event_id,matched_at) VALUES(?,?,?,'[]','{}','package-fixture',?)",
+      )
+      .bind(a.tenant, collection.id, id, p.retrievedAt)
+      .run();
+  }
+  await a.intel.putRelationship({
+    id: "package-cross-part",
+    sourceEntityId: ids[0]!,
+    targetEntityId: ids[104]!,
+    relationshipType: "USES",
+    assertionType: "source_claimed",
+    confidence: 0.8,
+    sourceIds: ["mitre"],
+    provenance: p,
+    createdAt: p.retrievedAt,
+    updatedAt: p.retrievedAt,
+  });
+  const requestId = crypto.randomUUID(),
+    id = await requestPackage(a, collection.id, requestId, "package-test");
+  expect(
+    await requestPackage(a, collection.id, requestId, "package-retry"),
+  ).toBe(id);
+  await expect(getPackage(b, id)).rejects.toMatchObject({ status: 404 });
+  const reader = new OperationsRepository(db, {
+    ...principal,
+    userId: "unauthorized-reader",
+    scopes: ["intel:read"],
+  });
+  await expect(getPackage(reader, id)).rejects.toMatchObject({ status: 404 });
+  await db
+    .prepare(
+      "DELETE FROM workspace_matches WHERE tenant_id=? AND object_id=? AND entity_id=?",
+    )
+    .bind(a.tenant, collection.id, ids[1])
+    .run();
+  // Miniflare uses undici Headers types at the test binding boundary.
+  const env = {
+    DB: db,
+    ARCHIVE: archive,
+    WEB_ORIGIN: "https://web.example.test",
+  } as unknown as import("../apps/api/src/env").AppEnv;
+  for (let i = 0; i < 20; i++) {
+    const row = await db
+      .prepare(
+        "SELECT data FROM pipeline_jobs WHERE tenant_id=? AND json_extract(data,'$.payload.packageId')=? AND status='queued' ORDER BY id LIMIT 1",
+      )
+      .bind(a.tenant, id)
+      .first<{ data: string }>();
+    if (!row) break;
+    const job = JSON.parse(
+      row.data,
+    ) as import("../packages/schemas/src/index").PipelineJob;
+    await processPackage(env, job);
+    await processPackage(env, job);
+  }
+  expect((await getPackage(a, id)).status).toBe("complete");
+  const parts = await db
+    .prepare(
+      "SELECT part,r2_key,sha256 FROM collection_package_parts WHERE tenant_id=? AND package_id=? ORDER BY part",
+    )
+    .bind(a.tenant, id)
+    .all<{ part: number; r2_key: string; sha256: string }>();
+  expect(parts.results).toHaveLength(5);
+  const objects: Record<string, unknown>[] = [];
+  for (const part of parts.results) {
+    const text = await (await archive.get(part.r2_key))!.text();
+    expect(await digest(text)).toBe(part.sha256);
+    objects.push(...JSON.parse(text).objects);
+  }
+  expect(objects.filter((o) => o.type === "malware")).toHaveLength(105);
+  expect(
+    objects.find((o) => o.x_threatsieve_entity_id === ids[1]),
+  ).toBeTruthy();
+  expect(
+    objects.some(
+      (o) =>
+        o.x_threatsieve_entity_id === ids[105] ||
+        o.x_threatsieve_entity_id === ids[106],
+    ),
+  ).toBe(false);
+  expect(objects.filter((o) => o.type === "relationship")).toHaveLength(1);
+  await db
+    .prepare(
+      "INSERT INTO api_keys(id,tenant_id,user_id,name,hash,scopes,created_at) VALUES('package-test-key',?,'alice','Fixture',?,'[\"admin\"]',?)",
+    )
+    .bind(a.tenant, await digest("package-test-secret"), p.retrievedAt)
+    .run();
+  const response = await app.request(
+    "/v1/collection-packages/" + id + "/parts/1",
+    { headers: { Authorization: "Bearer package-test-secret" } },
+    env as import("../apps/api/src/env").AppEnv,
+  );
+  expect(response.status).toBe(200);
+  expect(await digest(await response.text())).toBe(parts.results[1]!.sha256);
+  await db
+    .prepare(
+      "INSERT INTO tenant_source_policy(tenant_id,source_id,enabled,reason,updated_at) VALUES(?,'mitre',0,'Export restriction test',?)",
+    )
+    .bind(a.tenant, p.retrievedAt)
+    .run();
+  const blocked = await app.request(
+    "/v1/collection-packages/" + id + "/parts/1",
+    { headers: { Authorization: "Bearer package-test-secret" } },
+    env as import("../apps/api/src/env").AppEnv,
+  );
+  expect(blocked.status).toBe(409);
+  await db
+    .prepare(
+      "DELETE FROM tenant_source_policy WHERE tenant_id=? AND source_id='mitre'",
+    )
+    .bind(a.tenant)
+    .run();
+  await a.save(
+    {
+      ...collection,
+      title: "Changed package",
+      expectedRevision: collection.revision,
+    },
+    collection.id,
+    collection.revision,
+  );
+  await expect(getPackage(a, id)).rejects.toMatchObject({ status: 409 });
+  await cleanupPackages(env);
+  expect(
+    (await archive.list({ prefix: `packages/${a.tenant}/${id}/` })).objects
+      .length,
+  ).toBeGreaterThan(0);
+  await db
+    .prepare(
+      "UPDATE collection_packages SET expires_at='2020-01-01T00:00:00Z' WHERE tenant_id=? AND id=?",
+    )
+    .bind(a.tenant, id)
+    .run();
+  await cleanupPackages(env);
+  expect(
+    (await archive.list({ prefix: `packages/${a.tenant}/${id}/` })).objects,
+  ).toHaveLength(0);
+  expect(
+    await db
+      .prepare("SELECT id FROM collection_packages WHERE tenant_id=? AND id=?")
+      .bind(a.tenant, id)
+      .first(),
+  ).toBeNull();
+  expect(await a.intel.entity(ids[0]!)).toBeTruthy();
 });

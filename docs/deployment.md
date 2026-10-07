@@ -26,7 +26,7 @@ Set `CLOUDFLARE_ACCOUNT_ID`, `CLOUDFLARE_API_TOKEN`, `THREATSIEVE_D1_ID`, `THREA
 Review the SQL migration set before applying it to remote D1. Take a D1 backup/Time Travel recovery checkpoint according to your organisation's retention policy. Apply additive migrations as a separate release step. The deployment command does not automatically apply migrations.
 
 ```sh
-pnpm exec wrangler d1 migrations apply threatsieve-staging --remote --config wrangler.deploy.local.json
+pnpm exec wrangler d1 migrations apply threatsieve-staging --remote --config wrangler.staging.local.json
 pnpm exec wrangler secret put BETTER_AUTH_SECRET --name threatsieve-api-staging
 # Generate a cryptographically random value of at least 32 characters.
 pnpm exec wrangler secret put THREATFOX_AUTH_KEY --name threatsieve-api-staging
@@ -35,7 +35,7 @@ pnpm exec wrangler secret put URLHAUS_AUTH_KEY --name threatsieve-api-staging
 
 Generate the deployment config first with the deployment script's config-only mode described in `pnpm exec tsx scripts/deploy.ts --help`, then apply migrations before deploying traffic. Never commit generated credentials, `.dev.vars`, `.env.local`, real tenant bootstrap artifacts or raw customer intelligence.
 
-Existing installations must apply all migrations through `0014_tag_events.sql` before running this release. Migration 0008 adds personal saved views and browsing/sorting indexes without changing existing intelligence. Migration 0006 preserves existing users, tenant IDs and memberships while adding Better Auth tables; migration 0007 protects the final admin with D1 triggers. Migration 0005 preserves legacy exports and adds assessment revisions. Local `pnpm db:migrate` applies these to the development database.
+Existing installations must apply all migrations through `0018_collection_packages.sql` before running this release. Migration 0008 adds personal saved views and browsing/sorting indexes without changing existing intelligence. Migration 0006 preserves existing users, tenant IDs and memberships while adding Better Auth tables; migration 0007 protects the final admin with D1 triggers. Migration 0005 preserves legacy exports and adds assessment revisions. Local `pnpm db:migrate` applies these to the development database.
 
 ## Release
 
@@ -90,7 +90,14 @@ New operations jobs share the existing ingest queue and its dead-letter controls
 
 Optional source and integration settings are documented in [TAXII/MISP](taxii-misp.md) and [automation](automation.md). Keep credentials and integration target configuration in encrypted Worker environment values; the repository contains no active webhook targets.
 
-
 ## Operational reliability release
 
 Migrations 0015–0016 add outbox reservations, delivery generation recovery, operational indexes and tenant-scoped connector heartbeats. Record a D1 Time Travel bookmark before applying them, deploy the API, then the web Worker. The new **System health** page and least-privilege external probe are documented in [production operations](operations.md). Recovery preserves committed intelligence and does not claim that an accepted queue message is a completed source sync.
+
+## Readiness release
+
+See the [current readiness register](readiness.md), [restore verification](recovery.md) and [queued collection packages](collection-packages.md). Migration 0017 adds Better Auth second-factor storage; 0018 adds disposable export snapshots and queue indexes. Both are additive. Staging writes `wrangler.staging.local.json`; production retains `wrangler.deploy.local.json` so one environment cannot overwrite the other's configuration.
+
+Create the Vectorize metadata index before backfill: `wrangler vectorize create-metadata-index threatsieve-intel-staging --property-name entityType --type string` (use the production index for production). An administrator can queue `/v1/ops/vectorize/backfill` while retrieval is disabled and inspect `/v1/ops/vectorize`. Set `THREATSIEVE_VECTORIZE_ENABLED=true` only after coverage and live retrieval checks, and persist it in the matching GitHub environment for future releases.
+
+The production workflow accepts a full commit SHA with a successful main-branch CI run. The GitHub production environment restricts deployment to main and requires owner review. Automatic staging remains disabled until a dedicated, resource-scoped `CLOUDFLARE_API_TOKEN` is installed in GitHub; local Wrangler OAuth is never copied into CI secrets. Set `ENABLE_STAGING_DEPLOY=true` only after configuring that credential. Custom domains and their trusted auth origins require an explicitly selected domain.

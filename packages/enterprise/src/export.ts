@@ -143,6 +143,7 @@ export async function exportWorkspace(
   repo: OperationsRepository,
   o: WorkObject,
   seen = new Set<string>(),
+  includeMatches = true,
 ): Promise<StixBundle> {
   if (seen.has(o.id))
     return { type: "bundle", id: stixId("bundle", o.id), objects: [] };
@@ -156,7 +157,7 @@ export async function exportWorkspace(
   const objects = new Map<string, StixObject>(),
     entities = new Map<string, string>();
   const references = [...o.references];
-  if (o.kind === "collection") {
+  if (o.kind === "collection" && includeMatches) {
     const matches = await repo.db
       .prepare(
         "SELECT entity_id FROM workspace_matches WHERE tenant_id=? AND object_id=? ORDER BY entity_id LIMIT 101",
@@ -216,29 +217,11 @@ export async function exportWorkspace(
         !entities.has(edge.targetEntityId)
       )
         continue;
-      const object: StixObject = {
-        type: "relationship",
-        id: stixId("relationship", edge.id),
-        spec_version: "2.1",
-        created: edge.createdAt,
-        modified: edge.updatedAt,
-        relationship_type: edge.relationshipType
-          .toLowerCase()
-          .replaceAll("_", "-"),
-        source_ref: entities.get(edge.sourceEntityId),
-        target_ref: entities.get(edge.targetEntityId),
-        confidence: Math.round(edge.confidence * 100),
-        x_threatsieve_assertion_type: edge.assertionType,
-        external_references: [
-          {
-            source_name: edge.provenance.sourceName,
-            external_id: edge.provenance.sourceRecordId ?? edge.id,
-            ...(edge.provenance.sourceUrl
-              ? { url: edge.provenance.sourceUrl }
-              : {}),
-          },
-        ],
-      };
+      const object = relationshipStix(
+        edge,
+        entities.get(edge.sourceEntityId)!,
+        entities.get(edge.targetEntityId)!,
+      );
       objects.set(object.id, object);
     }
   if (o.kind === "report" && o.status === "published" && objects.size) {
@@ -419,5 +402,34 @@ export async function exportMisp(repo: OperationsRepository, o: WorkObject) {
         stix_bundle: bundle,
       },
     },
+  };
+}
+
+export function relationshipStix(
+  edge: import("../../schemas/src/index").IntelRelationship,
+  source: string,
+  target: string,
+): StixObject {
+  return {
+    type: "relationship",
+    id: stixId("relationship", edge.id),
+    spec_version: "2.1",
+    created: edge.createdAt,
+    modified: edge.updatedAt,
+    relationship_type: edge.relationshipType.toLowerCase().replaceAll("_", "-"),
+    source_ref: source,
+    target_ref: target,
+    confidence: Math.round(edge.confidence * 100),
+    x_threatsieve_assertion_type: edge.assertionType,
+    x_threatsieve_relationship_id: edge.id,
+    external_references: [
+      {
+        source_name: edge.provenance.sourceName,
+        external_id: edge.provenance.sourceRecordId ?? edge.id,
+        ...(edge.provenance.sourceUrl
+          ? { url: edge.provenance.sourceUrl }
+          : {}),
+      },
+    ],
   };
 }

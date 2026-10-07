@@ -1,7 +1,8 @@
 "use client";
 import Link from "next/link";
 import { IntelligenceGraph } from "./intelligence-graph";
-import { useState } from "react";
+import { useEffect, useState } from "react";
+import { toast } from "sonner";
 import { api, useApi } from "@/lib/api";
 import { Button } from "./ui/button";
 import { DataState } from "./shell";
@@ -268,6 +269,169 @@ export function InvestigationGraph({ object }: { object: WorkObject }) {
         key={root || entities[0]!.id}
         entityId={root || entities[0]!.id}
       />
+    </section>
+  );
+}
+
+interface PackageManifest {
+  id: string;
+  status: string;
+  matched_entities: number;
+  expires_at: string;
+  parts: { part: number; sha256: string; object_count: number }[];
+}
+export function CollectionPackage({
+  object,
+  canWrite,
+}: {
+  object: WorkObject;
+  canWrite: boolean;
+}) {
+  const [id, setId] = useState(""),
+    [manifest, setManifest] = useState<PackageManifest | null>(null),
+    [busy, setBusy] = useState(false),
+    [error, setError] = useState("");
+  useEffect(() => {
+    if (!id) return;
+    const controller = new AbortController();
+    let timer: ReturnType<typeof setTimeout>;
+    async function poll() {
+      try {
+        const result = await api<PackageManifest>(
+          "v1/collection-packages/" + id,
+          { signal: controller.signal },
+        );
+        if (controller.signal.aborted) return;
+        setManifest(result);
+        if (!["complete", "failed"].includes(result.status))
+          timer = setTimeout(() => void poll(), 3000);
+        else if (result.status === "complete")
+          toast.success("Your STIX package is ready to download.");
+      } catch (e) {
+        if (!controller.signal.aborted)
+          setError(
+            e instanceof Error ? e.message : "Could not load export progress.",
+          );
+      }
+    }
+    void poll();
+    return () => {
+      controller.abort();
+      clearTimeout(timer);
+    };
+  }, [id]);
+  function save(value: unknown, name: string, pretty = true) {
+    const url = URL.createObjectURL(
+      new Blob([JSON.stringify(value, null, pretty ? 2 : undefined)], {
+        type: "application/json",
+      }),
+    );
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = name;
+    a.click();
+    setTimeout(() => URL.revokeObjectURL(url), 1000);
+  }
+  return (
+    <section className="work-section">
+      <h2>STIX export package</h2>
+      <p>
+        Export up to 100,000 matched entities in background jobs. Download every
+        part to retain relationships across the package. Entity and assessment
+        references are supported; linked workspace documents are exported
+        separately.
+      </p>
+      <Button
+        variant="outline"
+        disabled={
+          !canWrite ||
+          busy ||
+          Boolean(manifest && !["complete", "failed"].includes(manifest.status))
+        }
+        onClick={async () => {
+          setBusy(true);
+          setError("");
+          try {
+            const result = await api<{ id: string }>(
+              "v1/collections/" + object.id + "/packages",
+              {
+                method: "POST",
+                body: JSON.stringify({ requestId: crypto.randomUUID() }),
+              },
+            );
+            setManifest(null);
+            setId(result.id);
+          } catch (e) {
+            setError(
+              e instanceof Error ? e.message : "Export could not start.",
+            );
+          } finally {
+            setBusy(false);
+          }
+        }}
+      >
+        {busy ? "Starting export…" : "Prepare STIX package"}
+      </Button>
+      {manifest && (
+        <>
+          <p role="status">
+            {manifest.status === "complete"
+              ? "Ready"
+              : manifest.status === "failed"
+                ? "Processing failed — an administrator can replay the failed job."
+                : "Processing"}{" "}
+            · {manifest.matched_entities.toLocaleString()} matched entities ·{" "}
+            {manifest.parts.length} parts prepared
+          </p>
+          {manifest.status === "complete" && (
+            <>
+              <p>
+                Downloads expire{" "}
+                {new Date(manifest.expires_at).toLocaleString()}.
+              </p>
+              <Button
+                variant="outline"
+                onClick={() => {
+                  save(manifest, "threatsieve-package-manifest.json");
+                  toast.success("Export manifest downloaded.");
+                }}
+              >
+                Download manifest
+              </Button>
+              <ul>
+                {manifest.parts.map((part) => (
+                  <li key={part.part}>
+                    <Button
+                      variant="ghost"
+                      onClick={async () => {
+                        try {
+                          const bundle = await api<unknown>(
+                            `v1/collection-packages/${id}/parts/${part.part}`,
+                          );
+                          save(bundle, `threatsieve-${id}-${part.part}.json`);
+                          toast.success("STIX part downloaded.");
+                        } catch (e) {
+                          setError(
+                            e instanceof Error ? e.message : "Download failed.",
+                          );
+                        }
+                      }}
+                    >
+                      Download part {part.part + 1} · {part.object_count}{" "}
+                      objects
+                    </Button>
+                  </li>
+                ))}
+              </ul>
+            </>
+          )}
+        </>
+      )}
+      {error && (
+        <p role="alert" className="form-error">
+          {error}
+        </p>
+      )}
     </section>
   );
 }

@@ -1,3 +1,4 @@
+import { processPackage } from "../../packages/enterprise/src/packages";
 import { dispatchOutbox, deadLetter } from "./reliability";
 import { deliverIntegration } from "../../packages/enterprise/src/integrations";
 import {
@@ -24,6 +25,7 @@ import {
 import { exportAssessment } from "../export/index";
 import { processBulk } from "./upload";
 import { enrichEntity } from "../enrich/index";
+import { backfillVectors } from "../enrich/backfill";
 import { correlate } from "../correlate/index";
 
 export function makeJob(
@@ -121,10 +123,20 @@ export async function processJob(env: AppEnv, job: PipelineJob) {
       return;
     }
     case "enrich":
+      if (job.payload.mode === "vector-backfill") {
+        await backfillVectors(env, job);
+        return;
+      }
       await repo.finish(
         job,
-        await enrichEntity(env, job.entityId),
-        next(job, "correlate"),
+        await enrichEntity(
+          env,
+          job.entityId,
+          job.payload.mode === "vector-index",
+        ),
+        job.payload.mode === "vector-index"
+          ? undefined
+          : next(job, "correlate"),
       );
       return;
     case "correlate":
@@ -158,6 +170,10 @@ export async function processJob(env: AppEnv, job: PipelineJob) {
         return;
       }
     case "export":
+      if (job.payload.mode === "collection-package") {
+        await processPackage(env, job);
+        return;
+      }
       if (!job.tenantId) throw new Error("Export requires tenant");
       {
         const id = z.string().parse(job.payload.assessmentId);

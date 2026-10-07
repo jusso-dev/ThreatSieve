@@ -27,15 +27,21 @@ export async function classify(
   const repo = new Repository(env.DB);
   const bundle = await buildEvidenceBundle(repo, tenantId, entityId);
   if (env.VECTORIZE_ENABLED === "true")
-    await retrieveSemanticCandidates(repo, bundle, env.VECTOR_INDEX, {
-      async embed(text) {
-        const output = await env.AI.run("@cf/baai/bge-base-en-v1.5", {
-          text: [text],
-        });
-        return z.object({ data: z.array(z.array(z.number())) }).parse(output)
-          .data[0]!;
+    await retrieveSemanticCandidates(
+      repo,
+      bundle,
+      env.VECTOR_INDEX,
+      {
+        async embed(text) {
+          const output = await env.AI.run("@cf/baai/bge-base-en-v1.5", {
+            text: [text],
+          });
+          return z.object({ data: z.array(z.array(z.number())) }).parse(output)
+            .data[0]!;
+        },
       },
-    });
+      tenantId,
+    );
   const sources = { results: await sourceReliabilities(env.DB, tenantId) };
   bundle.evidenceVersion = await digest(
     canonicalJson({

@@ -52,6 +52,7 @@ const navigation = [
   { name: "Intelligence sources", href: "/sources", icon: Database },
   { name: "Bulk analysis", href: "/bulk", icon: Upload },
   { name: "Team & access", href: "/team", icon: Users },
+  { name: "Account security", href: "/security", icon: ShieldCheck },
   { name: "Your environment", href: "/inventory", icon: Boxes },
   { name: "System health", href: "/system", icon: Activity, scope: "ops:read" },
 ];

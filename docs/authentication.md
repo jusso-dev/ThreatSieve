@@ -42,4 +42,4 @@ Scoped, hashed API keys remain supported for automation and OpenCTI. The API-key
 
 Sonner provides accessible, dismissible toasts for mutations, exports, import completion and request failures. Forms also retain inline errors and entered values. Permission errors explain how to get access; connection errors invite a retry; expired invitation/reset links explain how to recover. Read-only actions and repeated polling successes do not generate distracting notifications.
 
-SSO and MFA are not enabled by this release.
+Account security supports Better Auth TOTP enrollment, single-use encrypted recovery codes, replacement codes, disable with password confirmation, and revocation of other sessions. Enrollment is incomplete until an authenticator code verifies. Enabling TOTP revokes pre-enrollment sessions on the server. Password sign-in creates only a restricted challenge until the second factor verifies. Five failed sign-in second-factor attempts lock the account for 15 minutes. Recovery codes and setup secrets stay in browser memory and are never stored in browser storage or audit logs. SSO configuration remains provider-dependent.

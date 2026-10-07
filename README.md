@@ -6,7 +6,7 @@ ThreatSieve is a TypeScript-first intelligence pipeline and analyst workspace bu
 
 ![ThreatSieve operations workspace with explicitly labelled demonstration intelligence](docs/images/operations.png)
 
-[View the complete screenshot gallery](#screenshots).
+[View the complete screenshot gallery](#screenshots). [Current production readiness and remaining acceptance](docs/readiness.md).
 
 ## Run locally
 
@@ -171,6 +171,8 @@ Captured from the running application with the labelled synthetic demo dataset. 
 
 ### Team members and invitations
 
+![Account security with verified authenticator protection and session revocation](docs/images/account-security.png)
+
 ![Team management with role controls, invitations and toast notifications](docs/images/team-access.png)
 
 <img src="docs/images/team-mobile.png" width="320" alt="Responsive team management on mobile">
@@ -184,3 +186,5 @@ Captured from the running application with the labelled synthetic demo dataset. 
 ## Documentation
 
 [TIP UX review and design decisions](docs/tip-ux-review.md) · [All 244 reference entries](docs/research/catalogue.md) · [Accounts and teams](docs/authentication.md) · [Architecture](docs/architecture.md) · [Threat model](docs/threat-model.md) · [Classification](docs/classification.md) · [Confidence](docs/confidence-model.md) · [Sources](docs/intelligence-sources.md) · [Data model](docs/data-model.md) · [API](docs/api.md) · [OpenCTI](docs/opencti.md) · [Deployment](docs/deployment.md) · [Commercial architecture](docs/commercial-architecture.md)
+
+![Queued STIX collection package with download manifest](docs/images/collection-export.png)
