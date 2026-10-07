@@ -60,7 +60,8 @@ services:
   opencti:
     <<: *runtime
     image: opencti/platform:7.261002.0
-    ports: ["127.0.0.1:8080:8080"]
+    # The private address lets blakSOC on yumait-prod EKS read OpenCTI (security group admits only the EKS cluster SG).
+    ports: ["127.0.0.1:8080:8080", "172.31.49.31:8080:8080"]
     environment:
       NODE_OPTIONS: --max-old-space-size=8096
       APP__PORT: 8080
@@ -120,6 +121,103 @@ services:
       THREATSIEVE_API_KEY: ${THREATSIEVE_API_KEY:?}
       THREATSIEVE_COLLECTION_IDS: ${THREATSIEVE_COLLECTION_IDS:-}
       THREATSIEVE_HEARTBEAT: ${THREATSIEVE_HEARTBEAT:-false}
+    depends_on:
+      opencti: { condition: service_healthy }
+  # Public feed connectors (no API keys). They give blakSOC's alert enrichment real indicators to match;
+  # ThreatSieve's own connector above keeps sending its assessments and curated collections.
+  connector-mitre:
+    <<: *runtime
+    image: opencti/connector-mitre:7.261002.0
+    environment:
+      OPENCTI_URL: http://opencti:8080
+      OPENCTI_TOKEN: ${OPENCTI_CONNECTOR_TOKEN:?}
+      CONNECTOR_ID: d51bced6-be83-5820-bd0d-feacbd90d051
+      CONNECTOR_NAME: MITRE ATT&CK
+      CONNECTOR_SCOPE: tool,report,malware,identity,campaign,intrusion-set,attack-pattern,course-of-action,x-mitre-data-source,x-mitre-data-component,x-mitre-matrix,x-mitre-tactic,x-mitre-collection
+      MITRE_INTERVAL: 7
+      CONNECTOR_LOG_LEVEL: error
+    depends_on:
+      opencti: { condition: service_healthy }
+  connector-cisa-kev:
+    <<: *runtime
+    image: opencti/connector-cisa-known-exploited-vulnerabilities:7.261002.0
+    environment:
+      OPENCTI_URL: http://opencti:8080
+      OPENCTI_TOKEN: ${OPENCTI_CONNECTOR_TOKEN:?}
+      CONNECTOR_ID: 33c4b2ee-e25d-5b9c-8688-6529de204989
+      CONNECTOR_NAME: CISA Known Exploited Vulnerabilities
+      CONNECTOR_SCOPE: cisa
+      CISA_CATALOG_URL: https://www.cisa.gov/sites/default/files/feeds/known_exploited_vulnerabilities.json
+      CISA_CREATE_INFRASTRUCTURES: false
+      CISA_TLP: TLP:CLEAR
+      CONNECTOR_DURATION_PERIOD: P1D
+      CONNECTOR_LOG_LEVEL: error
+    depends_on:
+      opencti: { condition: service_healthy }
+  connector-abuse-ssl:
+    <<: *runtime
+    image: opencti/connector-abuse-ssl:7.261002.0
+    environment:
+      OPENCTI_URL: http://opencti:8080
+      OPENCTI_TOKEN: ${OPENCTI_CONNECTOR_TOKEN:?}
+      CONNECTOR_ID: 21caa568-2ba4-573e-99a9-0389938521de
+      CONNECTOR_NAME: Abuse.ch SSL Blacklist
+      CONNECTOR_SCOPE: abusessl
+      ABUSESSL_URL: https://sslbl.abuse.ch/blacklist/sslipblacklist.csv
+      ABUSESSL_INTERVAL: 360
+      CONNECTOR_LOG_LEVEL: error
+    depends_on:
+      opencti: { condition: service_healthy }
+  connector-opencti-datasets:
+    <<: *runtime
+    image: opencti/connector-opencti:7.261002.0
+    environment:
+      OPENCTI_URL: http://opencti:8080
+      OPENCTI_TOKEN: ${OPENCTI_CONNECTOR_TOKEN:?}
+      CONNECTOR_ID: 26469cae-4582-5c46-a5f9-7f99d1244975
+      CONNECTOR_NAME: OpenCTI Datasets
+      CONNECTOR_SCOPE: marking-definition,identity,location
+      CONNECTOR_RUN_AND_TERMINATE: false
+      CONFIG_SECTORS_FILE_URL: https://raw.githubusercontent.com/OpenCTI-Platform/datasets/master/data/sectors.json
+      CONFIG_GEOGRAPHY_FILE_URL: https://raw.githubusercontent.com/OpenCTI-Platform/datasets/master/data/geography.json
+      CONFIG_COMPANIES_FILE_URL: https://raw.githubusercontent.com/OpenCTI-Platform/datasets/master/data/companies.json
+      CONFIG_REMOVE_CREATOR: false
+      CONFIG_INTERVAL: 7
+      CONNECTOR_LOG_LEVEL: error
+    depends_on:
+      opencti: { condition: service_healthy }
+  connector-threatfox:
+    <<: *runtime
+    image: opencti/connector-threatfox:7.261002.0
+    environment:
+      OPENCTI_URL: http://opencti:8080
+      OPENCTI_TOKEN: ${OPENCTI_CONNECTOR_TOKEN:?}
+      CONNECTOR_ID: d1c36c2b-eac6-5848-90b7-d5c254a02108
+      CONNECTOR_NAME: ThreatFox
+      CONNECTOR_SCOPE: threatfox
+      THREATFOX_CSV_URL: https://threatfox.abuse.ch/export/csv/recent/
+      THREATFOX_IMPORT_OFFLINE: false
+      THREATFOX_CREATE_INDICATORS: true
+      THREATFOX_DEFAULT_X_OPENCTI_SCORE: 70
+      THREATFOX_INTERVAL: 1
+      CONNECTOR_LOG_LEVEL: error
+    depends_on:
+      opencti: { condition: service_healthy }
+  connector-urlhaus:
+    <<: *runtime
+    image: opencti/connector-urlhaus:7.261002.0
+    environment:
+      OPENCTI_URL: http://opencti:8080
+      OPENCTI_TOKEN: ${OPENCTI_CONNECTOR_TOKEN:?}
+      CONNECTOR_ID: 039945bf-6369-51b5-ab52-19ca8e0a3900
+      CONNECTOR_NAME: Abuse.ch URLhaus
+      CONNECTOR_SCOPE: urlhaus
+      URLHAUS_CSV_URL: https://urlhaus.abuse.ch/downloads/csv_recent/
+      URLHAUS_DEFAULT_X_OPENCTI_SCORE: 80
+      URLHAUS_IMPORT_OFFLINE: false
+      URLHAUS_THREATS_FROM_LABELS: true
+      URLHAUS_INTERVAL: 1
+      CONNECTOR_LOG_LEVEL: error
     depends_on:
       opencti: { condition: service_healthy }
 volumes:
