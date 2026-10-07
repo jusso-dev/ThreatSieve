@@ -11,7 +11,7 @@ Only OpenCTI's HTTP endpoint is published, on the host loopback address. Databas
 Requirements: AWS CLI v2 with an authenticated deployment role, Python 3, a private subnet with outbound access, and an existing ThreatSieve tenant. Create an API key through `POST /v1/api-keys` with `assessment:read` only and store the response plus the API origin in an owner-readable JSON file:
 
 ```json
-{"key":"<one-time connector key>","url":"https://your-api.workers.dev"}
+{ "key": "<one-time connector key>", "url": "https://your-api.workers.dev" }
 ```
 
 Do not commit that file. Provisioning generates independent random OpenCTI and dependency credentials in Secrets Manager. User data includes application files and a secret ARN; it contains no passwords or API keys.
@@ -59,3 +59,24 @@ Pin new platform, worker and pycti versions together, validate Compose, take a r
 ## Verified deployment
 
 On 2026-10-06, OpenCTI returned HTTP 200 with all dependency health checks passing. The ThreatSieve connector registered and delivered a real CISA KEV assessment bundle; OpenCTI contained the corresponding `CVE-2025-49113` vulnerability and linked assessment Note. The live environment uses real classifier results and source data, with no synthetic demo seed.
+
+## Connector-only maintenance and host monitoring
+
+Use the existing AWS login and deployment artifact to update this host without reprovisioning OpenCTI:
+
+```sh
+python3 infra/opencti/monitoring.py \
+  --region ap-southeast-2 --instance-id INSTANCE_ID \
+  --role threatsieve-opencti-production-host
+python3 infra/opencti/update.py --deployment artifacts/opencti-deployment.local.json
+```
+
+Configure `THREATSIEVE_COLLECTION_IDS` and `THREATSIEVE_HEARTBEAT=true` in the existing Secrets Manager configuration first. The ThreatSieve key needs `assessment:read`, `intel:read` for collections, and `integration:write` for heartbeats. It does not need administrator access. The updater requires the dedicated OpenCTI connector token; it refuses the bootstrap administrator token. It renders secrets only on the host, retains the previous connector image and root-only files under `/opt/opencti/releases/`, validates Compose, rebuilds and recreates only the connector, and installs a systemd health timer. Review its SSM command result before declaring success. A submitted command is not a completed rollout.
+
+The health probe runs once a minute and publishes five metrics in `ThreatSieve/OpenCTI`, scoped by `InstanceId`: probe heartbeat, required-container health, OpenCTI health, disk utilization and memory utilization. The instance role gains only `cloudwatch:PutMetricData` constrained to that namespace. The `ThreatSieve-OpenCTI` CloudWatch dashboard combines these with native EC2 CPU and status checks. Seven alarms evaluate three breaching minutes out of five; health signals treat missing data as a breach. Disk and memory thresholds are 85% and 90%, respectively. No SNS recipients, webhooks or automated stop/reboot actions are configured. These are visible CloudWatch alarms, not a claim that an external on-call team has received a page.
+
+Check `systemctl status threatsieve-opencti-health.timer` and `journalctl -u threatsieve-opencti-health.service` for sanitized probe results. Startup can briefly show missing-data alarms while the first measurements arrive. A probe failure reports only its exception class; it never logs a credential or health access URL.
+
+For connector rollback, select the recorded release directory, restore its `connector/` files and `compose.yaml`, refresh `.env` from the **current** Secrets Manager version, and recreate only `threatsieve` using the retained `threatsieve-opencti-rollback:RELEASE` image through a temporary Compose override. Do not restore a revoked API key from an older `.env`. The platform and data volumes are unaffected by connector-only rollback. Keep release directories protected and prune old retained images/files under your credential-retention policy.
+
+On 2026-10-07, the connector-only update was deployed to the existing private instance. A curated collection containing the real CISA `CVE-2025-49113` assessment and MITRE's Mori malware, `T1071.001` technique and source-claimed `uses` relationship passed independent STIX validation and completed a five-object OpenCTI import. Read-back verified destination entities and the relationship. Restart preserved the export checkpoint; republishing the same collection retained the same destination object identities and one `uses` relationship. The old ThreatSieve connector key was revoked after verifying its scoped replacement. The health timer published real host measurements and all seven CloudWatch alarms reached OK. No synthetic intelligence or customer telemetry was used in this acceptance collection.

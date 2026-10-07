@@ -645,3 +645,67 @@ it("escapes spreadsheet formulas including whitespace-prefixed values", async ()
   expect(csvCell('  =HYPERLINK("https://example.test")')).toContain("'  =");
   expect(csvCell("plain")).toBe('"plain"');
 });
+
+it("exports source-backed entities and relationships with valid STIX external references", async () => {
+  const { exportWorkspace } = await import("../packages/enterprise/src/export");
+  const { mkdirSync, writeFileSync } = await import("node:fs");
+  const malware = "malware--11111111-1111-4111-8111-111111111111";
+  const technique = "attack-pattern--22222222-2222-4222-8222-222222222222";
+  const relationship = "relationship--33333333-3333-4333-8333-333333333333";
+  for (const [id, type] of [
+    [malware, "malware"],
+    [technique, "attack-technique"],
+  ] as const)
+    await a.intel.putEntity({
+      id,
+      type,
+      name: "Synthetic interoperability fixture",
+      description: "Offline regression fixture",
+      aliases: [],
+      data: {},
+      provenance: p,
+    });
+  await a.intel.putRelationship({
+    id: relationship,
+    sourceEntityId: malware,
+    targetEntityId: technique,
+    relationshipType: "USES",
+    assertionType: "source_claimed",
+    confidence: 0.8,
+    sourceIds: [p.sourceId],
+    provenance: p,
+    createdAt: p.retrievedAt,
+    updatedAt: p.retrievedAt,
+  });
+  const collection = await a.save(
+    WorkInput.parse({
+      kind: "collection",
+      title: "Offline STIX interoperability fixture",
+      references: [
+        { type: "entity", id: malware },
+        { type: "entity", id: technique },
+      ],
+    }),
+  );
+  const bundle = await exportWorkspace(a, collection);
+  expect(bundle.objects).toHaveLength(3);
+  for (const object of bundle.objects) {
+    const refs = object.external_references as {
+      source_name: string;
+      external_id?: string;
+      url?: string;
+      description?: string;
+    }[];
+    expect(refs.length).toBeGreaterThan(0);
+    for (const ref of refs)
+      expect(Boolean(ref.external_id || ref.url || ref.description)).toBe(true);
+  }
+  expect(
+    bundle.objects.find((o) => o.type === "relationship")!.external_references,
+  ).toEqual([{ source_name: p.sourceName, external_id: relationship }]);
+  mkdirSync("artifacts", { recursive: true });
+  writeFileSync(
+    "artifacts/enterprise-stix.json",
+    JSON.stringify(bundle, null, 2),
+  );
+});

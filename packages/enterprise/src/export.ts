@@ -49,7 +49,10 @@ export function entityStix(
   const references = [
     {
       source_name: entity.provenance.sourceName,
-      ...(entity.externalId ? { external_id: entity.externalId } : {}),
+      external_id:
+        entity.externalId ??
+        entity.provenance.sourceRecordId ??
+        entity.provenance.sourceId,
       ...(entity.provenance.sourceUrl
         ? { url: entity.provenance.sourceUrl }
         : {}),
@@ -226,7 +229,15 @@ export async function exportWorkspace(
         target_ref: entities.get(edge.targetEntityId),
         confidence: Math.round(edge.confidence * 100),
         x_threatsieve_assertion_type: edge.assertionType,
-        external_references: [{ source_name: edge.provenance.sourceName }],
+        external_references: [
+          {
+            source_name: edge.provenance.sourceName,
+            external_id: edge.provenance.sourceRecordId ?? edge.id,
+            ...(edge.provenance.sourceUrl
+              ? { url: edge.provenance.sourceUrl }
+              : {}),
+          },
+        ],
       };
       objects.set(object.id, object);
     }
