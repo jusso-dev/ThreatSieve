@@ -69,9 +69,6 @@ export function WorkspaceList({ kind }: { kind: WorkKind }) {
     data: (WorkObject & { metrics?: RequirementMetrics })[];
     next_cursor: string | null;
   }>("v1/" + workApi(kind) + "?" + query);
-  const members = useApi<{
-    data: { id: string; name: string; email: string }[];
-  }>("v1/workspace/members");
   return (
     <>
       <PageHeader
@@ -128,7 +125,6 @@ export function WorkspaceList({ kind }: { kind: WorkKind }) {
                       <th>New evidence</th>
                     </>
                   )}
-                  <th>Owner</th>
                   <th>Updated</th>
                 </tr>
               </thead>
@@ -166,10 +162,6 @@ export function WorkspaceList({ kind }: { kind: WorkKind }) {
                         <td>{o.metrics?.newEvidence ?? 0}</td>
                       </>
                     )}
-                    <td>
-                      {members.data?.data.find((m) => m.id === o.ownerId)
-                        ?.name || "Workspace member"}
-                    </td>
                     <td title={absoluteTime(o.updatedAt)}>
                       {relativeTime(o.updatedAt)}
                     </td>
@@ -316,11 +308,6 @@ export function WorkspaceDetail({ kind, id }: { kind: WorkKind; id: string }) {
           {o.priority} priority
         </span>
         <span>{o.status.replaceAll("-", " ")}</span>
-        <span>
-          Owner:{" "}
-          {members.data?.data.find((m) => m.id === o.ownerId)?.name ||
-            "Workspace member"}
-        </span>
         <span>Updated {relativeTime(o.updatedAt)}</span>
         {o.tags.map((t) => (
           <span className="entity-type" key={t}>
@@ -863,20 +850,6 @@ export function WorkEditor({
               ))}
             </select>
           </label>
-          <label>
-            Owner
-            <select
-              value={str("ownerId")}
-              onChange={(e) => set("ownerId", e.target.value || undefined)}
-            >
-              <option value="">Assign to me</option>
-              {members.data?.data.map((m) => (
-                <option key={m.id} value={m.id}>
-                  {m.name || m.email}
-                </option>
-              ))}
-            </select>
-          </label>
         </div>
         {textField("description", "Description")}
         {kind === "requirement" &&
@@ -896,7 +869,6 @@ export function WorkEditor({
                   "actor-profile",
                   "campaign-report",
                   "ioc-package",
-                  "investigation-report",
                   "executive-brief",
                   "requirement-update",
                 ].map((p) => (
