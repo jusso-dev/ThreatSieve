@@ -78,7 +78,6 @@ export function ReferencePicker({
               "evidence",
               "assessment",
               "requirement",
-              "investigation",
               "watchlist",
               "collection",
               "report",
@@ -101,7 +100,6 @@ export function ReferencePicker({
               "contradicts",
               "satisfies",
               "member",
-              "investigates",
             ].map((v) => (
               <option key={v}>{v}</option>
             ))}
@@ -164,7 +162,7 @@ function PinDialog({
   reference: Reference;
   onClose: () => void;
 }) {
-  const [kind, setKind] = useState<WorkKind>("investigation"),
+  const [kind, setKind] = useState<WorkKind>("collection"),
     [busy, setBusy] = useState(false),
     [error, setError] = useState("");
   const { data } = useApi<{ data: WorkObject[] }>(
@@ -183,7 +181,6 @@ function PinDialog({
             >
               {(
                 [
-                  "investigation",
                   "requirement",
                   "watchlist",
                   "collection",

@@ -68,6 +68,11 @@ export class Repository {
           now,
           Number(!["upload", "customer"].includes(e.provenance.sourceId)),
         ),
+      ...this.sourceStatements(e),
+    ];
+  }
+  sourceStatements(e: IntelEntity) {
+    return [
       this.db
         .prepare(
           "INSERT INTO entity_sources VALUES(?,?,?,?) ON CONFLICT(entity_id,source_id,source_record_id) DO UPDATE SET provenance=excluded.provenance",
@@ -86,6 +91,36 @@ export class Repository {
           .bind(aliasKey(a), e.id, e.provenance.sourceId),
       ),
     ];
+  }
+  // Another producer's copy of a CVE or ATT&CK object (e.g. re-keyed by OpenCTI).
+  async canonicalEntityId(e: IntelEntity) {
+    const lookup =
+      e.type === "vulnerability"
+        ? [
+            "SELECT entity_id FROM vulnerabilities WHERE cve=?",
+            e.externalId ?? e.name,
+          ]
+        : e.type === "attack-technique" && e.externalId
+          ? [
+              "SELECT entity_id FROM attack_techniques WHERE mitre_id=?",
+              e.externalId,
+            ]
+          : e.type === "attack-tactic" && e.externalId
+            ? [
+                "SELECT entity_id FROM attack_tactics WHERE mitre_id=?",
+                e.externalId,
+              ]
+            : undefined;
+    if (!lookup) return undefined;
+    const row = await this.db
+      .prepare(lookup[0]!)
+      .bind(lookup[1]!)
+      .first<{ entity_id: string }>();
+    return row?.entity_id;
+  }
+  // Records a secondary source on an existing entity without replacing its data.
+  async attachSource(entityId: string, e: IntelEntity) {
+    await this.db.batch(this.sourceStatements({ ...e, id: entityId }));
   }
   async putEntity(e: IntelEntity) {
     const statements = this.entityStatements(e);

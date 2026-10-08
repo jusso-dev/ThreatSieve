@@ -66,7 +66,6 @@ export function CommandPalette({ onClose }: { onClose: () => void }) {
     router.push(path);
   };
   const commands = [
-    { name: "New investigation", path: "/cases?new=1", write: true },
     { name: "Assess indicator", path: "/?assess=1", write: true },
     { name: "Bulk analyse", path: "/bulk", write: true },
     { name: "Search actor", path: "/intelligence?type=threat-actor" },
@@ -74,8 +73,6 @@ export function CommandPalette({ onClose }: { onClose: () => void }) {
     { name: "Create requirement", path: "/requirements?new=1", write: true },
     { name: "Create watchlist", path: "/watchlists?new=1", write: true },
     { name: "Sync source", path: "/sources" },
-    { name: "Open investigations", path: "/cases" },
-    { name: "Record sighting", path: "/sightings" },
   ].filter(
     (c) =>
       (!c.write || canWrite) &&
@@ -108,7 +105,7 @@ export function CommandPalette({ onClose }: { onClose: () => void }) {
         className="command-input"
         aria-label="Search all intelligence and commands"
         autoComplete="off"
-        placeholder="Search intelligence, requirements, investigations…"
+        placeholder="Search intelligence, requirements, watchlists…"
         value={query}
         maxLength={200}
         onChange={(e) => {
@@ -188,7 +185,7 @@ export function CommandPalette({ onClose }: { onClose: () => void }) {
                   }
                 }}
               >
-                Add to investigation
+                Add to intelligence
               </button>
             )}
           </div>

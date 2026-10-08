@@ -63,7 +63,7 @@ Set edge rate/body limits, log retention, alerting, billing alerts, and provider
 
 ## Cloudflare production verification
 
-The hosted workspace is [ThreatSieve](https://threatsieve-web-production.yuma-it.workers.dev), with the [API health endpoint](https://threatsieve-api-production.yuma-it.workers.dev/health). Authentication is required for intelligence endpoints. Production has no synthetic demo seed.
+The hosted workspace is [ThreatSieve](https://threatsieve.yumait.au), with the [API health endpoint](https://api.threatsieve.yumait.au/health). Authentication is required for intelligence endpoints. Production has no synthetic demo seed.
 
 The web Worker calls the API using its `THREATSIEVE_API` HTTP service binding. The release script binds it to the matching stage's API Worker. Direct same-account `workers.dev` fetches can return Cloudflare error 1042; local Node development continues using `API_ORIGIN`.
 
@@ -100,7 +100,7 @@ See the [current readiness register](readiness.md), [restore verification](recov
 
 Create the Vectorize metadata index before backfill: `wrangler vectorize create-metadata-index threatsieve-intel-staging --property-name entityType --type string` (use the production index for production). An administrator can queue `/v1/ops/vectorize/backfill` while retrieval is disabled and inspect `/v1/ops/vectorize`. Set `THREATSIEVE_VECTORIZE_ENABLED=true` only after coverage and live retrieval checks, and persist it in the matching GitHub environment for future releases.
 
-The production workflow accepts a full commit SHA with a successful main-branch CI run. The GitHub production environment restricts deployment to main and requires owner review. Automatic staging remains disabled until a dedicated, resource-scoped `CLOUDFLARE_API_TOKEN` is installed in GitHub; local Wrangler OAuth is never copied into CI secrets. Set `ENABLE_STAGING_DEPLOY=true` only after configuring that credential. Custom domains and their trusted auth origins require an explicitly selected domain.
+The production workflow accepts a full commit SHA with a successful main-branch CI run. The GitHub production environment restricts deployment to main and requires owner review. Automatic staging remains disabled until a dedicated, resource-scoped `CLOUDFLARE_API_TOKEN` is installed in GitHub; local Wrangler OAuth is never copied into CI secrets. Set `ENABLE_STAGING_DEPLOY=true` only after configuring that credential. Production serves the workspace at `threatsieve.yumait.au` and the API at `api.threatsieve.yumait.au`. The deploy script attaches a Worker Custom Domain for any origin outside `workers.dev`, which also disables that Worker's `workers.dev` route. `WEB_ORIGIN` is the single trusted auth origin, so sessions and invitation links use the custom domain.
 
 After an account enables MFA, do not roll the API back to a release that lacks MFA enforcement. Prefer a forward fix or disable password sign-in at the edge while recovering. Additive migration rollback alone does not preserve second-factor protection.
 

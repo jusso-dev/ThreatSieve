@@ -1,9 +1,6 @@
-import { Suspense } from "react";
-import { WorkspaceList } from "@/components/workspace-objects";
+import { redirect } from "next/navigation";
+// Case management, automation and sighting intake are not part of this
+// workspace; ThreatSieve is a single place to view collected intelligence.
 export default function Page() {
-  return (
-    <Suspense fallback={<p>Loading workspace…</p>}>
-      <WorkspaceList kind="playbook" />
-    </Suspense>
-  );
+  redirect("/");
 }

@@ -1,9 +1,6 @@
-import { WorkspaceDetail } from "@/components/workspace-objects";
-export default async function Page({
-  params,
-}: {
-  params: Promise<{ id: string }>;
-}) {
-  const { id } = await params;
-  return <WorkspaceDetail kind="investigation" id={id} />;
+import { redirect } from "next/navigation";
+// Case management, automation and sighting intake are not part of this
+// workspace; ThreatSieve is a single place to view collected intelligence.
+export default function Page() {
+  redirect("/");
 }

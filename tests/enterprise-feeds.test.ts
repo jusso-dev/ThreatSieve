@@ -2,6 +2,7 @@ import { it, expect } from "vitest";
 import { OptionalFeed } from "../packages/intel/src/optional-feeds";
 import { Repository } from "../packages/database/src/repository";
 import { stixRecord } from "../packages/intel/src/feeds";
+import { vpcRequest } from "../workers/feed-sync/index";
 const repo = {} as Repository; // These adapter tests do not use persistence.
 it("preserves TAXII continuation tokens without following remote pagination URLs", async () => {
   const urls: URL[] = [];
@@ -126,4 +127,37 @@ it("preserves report and course-of-action source objects and knowledge-only evid
     expect(records[0]!.evidence[0]!.behavioural).toBe(false);
     expect(records[0]!.relationships).toHaveLength(0);
   }
+});
+
+it("routes a private TAXII server through its VPC binding over the tunnel", async () => {
+  const seen: { url: string; auth: string | null }[] = [];
+  const binding = {
+    fetch: async (input: URL | RequestInfo, init?: RequestInit) => {
+      seen.push({
+        url: String(input),
+        auth: new Headers(init?.headers).get("authorization"),
+      });
+      return Response.json({ objects: [], more: false });
+    },
+  } as unknown as Fetcher;
+  const feed = new OptionalFeed(
+    "taxii",
+    "Private TAXII",
+    repo,
+    {
+      enabled: true,
+      endpoint:
+        "https://opencti.threatsieve.internal/taxii2/root/collections/c/objects/",
+      allowedHost: "opencti.threatsieve.internal",
+      apiKey: "reader-token",
+      pageLimit: 500,
+    },
+    vpcRequest(binding),
+  );
+  await feed.fetch();
+  expect(new URL(seen[0]!.url).searchParams.get("limit")).toBe("500");
+  expect(seen).toHaveLength(1);
+  expect(new URL(seen[0]!.url).protocol).toBe("http:");
+  expect(new URL(seen[0]!.url).hostname).toBe("opencti.threatsieve.internal");
+  expect(seen[0]!.auth).toBe("Bearer reader-token");
 });

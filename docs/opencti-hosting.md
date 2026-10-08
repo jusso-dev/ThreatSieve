@@ -4,7 +4,7 @@ ThreatSieve runs on Cloudflare. OpenCTI and its native Python connector run sepa
 
 The host uses Amazon Linux 2023, `r8i.xlarge` (4 vCPU, 32 GiB RAM), and a retained, encrypted 250 GiB gp3 root volume. Docker volumes persist Elasticsearch, Redis, RabbitMQ and S3-compatible object data there. It has termination protection, IMDSv2, an instance profile scoped to its configuration secret and SSM, no public IP and no ingress rules. Application containers do not receive AWS instance credentials. The selected private subnet must have outbound NAT access to image registries, AWS APIs and the ThreatSieve HTTPS API.
 
-Only OpenCTI's HTTP endpoint is published, on the host loopback address. Databases, object storage and the broker have no host ports. Access OpenCTI through the encrypted SSM tunnel; choose a hostname, trusted HTTPS gateway and access policy before making it public.
+Only OpenCTI's HTTP endpoint is published, on the host loopback and private addresses. An outbound-only `cloudflared` container serves the ThreatSieve API's Workers VPC binding for TAXII import; it has no public hostname. See [OpenCTI as a ThreatSieve source](opencti.md#opencti-as-a-threatsieve-source). Databases, object storage and the broker have no host ports. Access OpenCTI through the encrypted SSM tunnel; choose a hostname, trusted HTTPS gateway and access policy before making it public.
 
 ## Provision
 
