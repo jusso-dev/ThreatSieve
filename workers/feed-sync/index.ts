@@ -43,6 +43,7 @@ export function getFeed(env: AppEnv, id: string) {
         endpoint: config[prefix + "_ENDPOINT"],
         allowedHost: config[prefix + "_ALLOWED_HOST"],
         apiKey: config[prefix + "_API_KEY"],
+        pageLimit: Number(config[prefix + "_PAGE_LIMIT"] ?? 100),
       },
       id === "taxii" && env.OPENCTI_VPC
         ? vpcRequest(env.OPENCTI_VPC)

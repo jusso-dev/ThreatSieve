@@ -150,10 +150,12 @@ it("routes a private TAXII server through its VPC binding over the tunnel", asyn
         "https://opencti.threatsieve.internal/taxii2/root/collections/c/objects/",
       allowedHost: "opencti.threatsieve.internal",
       apiKey: "reader-token",
+      pageLimit: 500,
     },
     vpcRequest(binding),
   );
   await feed.fetch();
+  expect(new URL(seen[0]!.url).searchParams.get("limit")).toBe("500");
   expect(seen).toHaveLength(1);
   expect(new URL(seen[0]!.url).protocol).toBe("http:");
   expect(new URL(seen[0]!.url).hostname).toBe("opencti.threatsieve.internal");
