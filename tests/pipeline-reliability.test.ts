@@ -37,6 +37,7 @@ beforeAll(async () => {
   env = {
     DB: db,
     INGEST_QUEUE: queue,
+    OPERATIONS_QUEUE: queue,
     NORMALISE_QUEUE: queue,
     ENRICH_QUEUE: queue,
     CORRELATE_QUEUE: queue,
@@ -53,6 +54,27 @@ beforeEach(async () => {
     db.prepare("DELETE FROM pipeline_jobs"),
   ]);
   sent.length = 0;
+});
+it("operations jobs publish on their own queue", async () => {
+  const published: PipelineJob[] = [];
+  const operations = {
+    sendBatch: vi.fn(async (messages: { body: PipelineJob }[]) => {
+      published.push(...messages.map((m) => m.body));
+    }),
+  } as unknown as Queue;
+  const ingest = {
+    sendBatch: vi.fn(async () => {
+      throw new Error("operations must not use ingest");
+    }),
+  } as unknown as Queue;
+  await repo.enqueue(makeJob("operations", "entity"));
+  await dispatchOutbox({
+    ...env,
+    OPERATIONS_QUEUE: operations,
+    INGEST_QUEUE: ingest,
+  });
+  expect(published.map((job) => job.stage)).toEqual(["operations"]);
+  expect(ingest.sendBatch).not.toHaveBeenCalled();
 });
 it("concurrent dispatchers reserve each outbox item once", async () => {
   for (let i = 0; i < 25; i++)

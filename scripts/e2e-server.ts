@@ -27,6 +27,7 @@ async function main() {
   const controlKey = crypto.randomUUID();
   const queues = [
     "ingest",
+    "operations",
     "normalise",
     "enrich",
     "correlate",

@@ -17,6 +17,7 @@ export async function dispatchOutbox(env: AppEnv) {
     .all<{ id: string; queue: string; data: string }>();
   const bindings: Record<string, Queue> = {
     ingest: env.INGEST_QUEUE,
+    operations: env.OPERATIONS_QUEUE,
     normalise: env.NORMALISE_QUEUE,
     enrich: env.ENRICH_QUEUE,
     correlate: env.CORRELATE_QUEUE,

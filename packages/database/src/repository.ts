@@ -601,7 +601,7 @@ export class Repository {
       delivery?: { id: string; generation: number };
     } = {},
   ) {
-    const queue = ["feed-sync", "bulk", "operations"].includes(job.stage)
+    const queue = ["feed-sync", "bulk"].includes(job.stage)
       ? "ingest"
       : job.stage;
     return [

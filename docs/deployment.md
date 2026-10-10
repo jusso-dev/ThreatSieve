@@ -12,6 +12,7 @@ pnpm exec wrangler r2 bucket create threatsieve-archive-staging
 pnpm exec wrangler vectorize create threatsieve-intel-staging --dimensions=768 --metric=cosine
 pnpm exec wrangler queues create intel-dead-letter-staging
 pnpm exec wrangler queues create intel-ingest-staging
+pnpm exec wrangler queues create intel-operations-staging
 pnpm exec wrangler queues create intel-normalise-staging
 pnpm exec wrangler queues create intel-enrich-staging
 pnpm exec wrangler queues create intel-correlate-staging
