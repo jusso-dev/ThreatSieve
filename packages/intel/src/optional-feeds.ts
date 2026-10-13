@@ -14,7 +14,6 @@ export interface OptionalFeedConfig {
   apiKey?: string;
   endpoint?: string;
   allowedHost?: string;
-  pageLimit?: number;
   format?: "stix" | "misp" | "text" | "csv" | "json";
   /** TAXII objects per page (1-1000); servers may cap it lower. Default 100. */
   pageLimit?: number;
