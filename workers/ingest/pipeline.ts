@@ -227,6 +227,14 @@ export async function consume(batch: MessageBatch<unknown>, env: AppEnv) {
   }
   const seen = new Set<string>();
   let processed = false;
+  let feedProgress = false;
+  const feedStages = new Set([
+    "feed-sync",
+    "ingest",
+    "normalise",
+    "enrich",
+    "correlate",
+  ]);
   for (const message of batch.messages) {
     const parsed = JobSchema.safeParse(message.body);
     if (!parsed.success) {
@@ -275,6 +283,7 @@ export async function consume(batch: MessageBatch<unknown>, env: AppEnv) {
         continue;
       }
       await processJob(env, job);
+      if (feedStages.has(job.stage)) feedProgress = true;
       message.ack();
       log({
         job_id: job.jobId,
@@ -310,6 +319,7 @@ export async function consume(batch: MessageBatch<unknown>, env: AppEnv) {
   if (processed) {
     await scheduleOperations(env.DB);
     await dispatchOutbox(env);
-    await finalizeFeeds(env);
+    // Feed finalization scans completed feed roots. Unrelated batches must not pay for that.
+    if (feedProgress) await finalizeFeeds(env);
   }
 }

@@ -7,6 +7,7 @@ interface __BaseEnv_Env {
 	VECTOR_INDEX: VectorizeIndex;
 	EMAIL: SendEmail;
 	INGEST_QUEUE: Queue;
+	OPERATIONS_QUEUE: Queue;
 	NORMALISE_QUEUE: Queue;
 	ENRICH_QUEUE: Queue;
 	CORRELATE_QUEUE: Queue;
