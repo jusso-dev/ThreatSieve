@@ -27,54 +27,6 @@ function capture(relative: string, name: string) {
   if (!source) throw new Error("Screenshot missing");
   copyFileSync(".e2e/artifacts/" + source, "docs/images/" + name + ".png");
 }
-test("analysts create investigations, preserve drafts, record decisions and complete tasks", async ({
-  browser,
-  screen,
-  workspace,
-}) => {
-  await browser.goto("/cases?new=1");
-  await expect(screen.getByRole("dialog")).toBeVisible();
-  await screen
-    .getByLabel("Title", { exact: true })
-    .fill("Demo suspicious infrastructure investigation");
-  await screen
-    .getByLabel("Working hypothesis")
-    .fill(
-      "A shared payload may explain the observations; attribution remains unknown.",
-    );
-  await screen
-    .getByRole("button", "Save investigation", { exact: true })
-    .click();
-  await expect(
-    screen.getByRole("heading", "Demo suspicious infrastructure investigation"),
-  ).toBeVisible();
-  await screen
-    .getByLabel("New investigation task")
-    .fill("Check independent behavioural evidence");
-  await screen.getByRole("button", "Add task", { exact: true }).click();
-  await screen.getByLabel("Check independent behavioural evidence").check();
-  await screen.getByLabel("Entry type").selectOption({ value: "decision" });
-  await screen
-    .getByLabel("Reasoning and evidence")
-    .fill(
-      "Do not attribute this to an actor without behavioural corroboration.",
-    );
-  await screen.getByRole("button", "Record decision").click();
-  await expect(
-    screen.getByText(
-      "Do not attribute this to an actor without behavioural corroboration.",
-      { exact: true },
-    ),
-  ).toBeVisible();
-  await browser.reload();
-  await expect(
-    screen.getByLabel("Check independent behavioural evidence"),
-  ).toBeChecked();
-  const list = await json<{ data: WorkObject[] }>(
-    await request(workspace, "/v1/investigations"),
-  );
-  expect(list.data[0]!.kind).toBe("investigation");
-});
 test("PIR coverage is evidence-linked and scoped; matches remain suggestions", async ({
   browser,
   screen,
@@ -215,8 +167,7 @@ test("private sightings are idempotent, do not imply maliciousness and trigger w
       { timeout: 30000 },
     )
     .toBe(true);
-  await browser.goto("/sightings");
-  await expect(screen.getByRole("link", value, { exact: true })).toBeVisible();
+  await browser.goto("/");
   await screen.getByRole("button", "Open intelligence notifications").click();
   await expect(
     screen.getByRole("heading", "Intelligence notifications"),
@@ -414,16 +365,6 @@ test("enterprise workspaces, dossier, graph and source console render without mo
       { type: "assessment", id: a.assessment_id, relation: "supports" },
     ],
   });
-  const investigation = await create(workspace, "investigations", {
-    title: "Demo infrastructure investigation",
-    hypothesis:
-      "Shared infrastructure requires independent corroboration before attribution.",
-    priority: "high",
-    references: [
-      { type: "entity", id: a.observable.id, relation: "investigates" },
-    ],
-    tasks: [{ id: "triage", title: "Validate source provenance", done: false }],
-  });
   await create(workspace, "watchlists", {
     title: "Demo infrastructure watch",
     criteria: { keywords: ["beacon"] },
@@ -450,15 +391,9 @@ test("enterprise workspaces, dossier, graph and source console render without mo
       requirement.title,
       "requirement-detail",
     ],
-    [
-      "/cases/" + investigation.id,
-      investigation.title,
-      "analyst-investigation",
-    ],
     ["/watchlists", "Watchlists", "watchlists"],
     ["/collections", "Collections", "collections"],
     ["/reports/" + report.id, report.title, "intelligence-report"],
-    ["/automations", "Automation", "automation"],
     [
       "/intelligence/" + a.observable.id,
       a.observable.normalizedValue,

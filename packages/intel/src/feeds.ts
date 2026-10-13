@@ -244,6 +244,7 @@ export interface FeedSecrets {
   TAXII_ENDPOINT?: string;
   TAXII_ALLOWED_HOST?: string;
   TAXII_API_KEY?: string;
+  TAXII_PAGE_LIMIT?: string;
   STIX_ENABLED?: string;
   STIX_ENDPOINT?: string;
   STIX_ALLOWED_HOST?: string;

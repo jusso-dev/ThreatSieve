@@ -2,7 +2,7 @@ import { readFileSync, writeFileSync, mkdirSync } from "node:fs";
 import { execFileSync } from "node:child_process";
 if (process.argv.includes("--help")) {
   console.log(
-    "pnpm run deploy [--config-only] [--production]. Requires CLOUDFLARE_ACCOUNT_ID, THREATSIEVE_D1_ID, THREATSIEVE_WEB_ORIGIN, THREATSIEVE_API_ORIGIN. Remote migrations are applied separately.",
+    "pnpm run deploy [--config-only] [--production]. Requires CLOUDFLARE_ACCOUNT_ID, THREATSIEVE_D1_ID, THREATSIEVE_WEB_ORIGIN, THREATSIEVE_API_ORIGIN; optional THREATSIEVE_OPENCTI_VPC_SERVICE_ID. Remote migrations are applied separately.",
   );
   process.exit(0);
 }
@@ -45,11 +45,28 @@ const config = JSON.parse(
     producers: { queue: string }[];
     consumers: { queue: string; dead_letter_queue?: string }[];
   };
+  routes?: { pattern: string; custom_domain: true }[];
+  vpc_services?: { binding: string; service_id: string }[];
+};
+// Origins on a custom hostname are attached as Worker Custom Domains; workers.dev needs none.
+const customDomain = (origin: string) => {
+  const host = new URL(origin).hostname;
+  return host.endsWith(".workers.dev")
+    ? undefined
+    : [{ pattern: host, custom_domain: true as const }];
 };
 config.name = "threatsieve-api-" + stage;
 config.account_id = account;
 config.vars.APP_ENV = stage;
 config.vars.WEB_ORIGIN = webOrigin;
+config.routes = customDomain(apiOrigin);
+if (process.env.THREATSIEVE_OPENCTI_VPC_SERVICE_ID)
+  config.vpc_services = [
+    {
+      binding: "OPENCTI_VPC",
+      service_id: process.env.THREATSIEVE_OPENCTI_VPC_SERVICE_ID,
+    },
+  ];
 config.vars.VECTORIZE_ENABLED =
   process.env.THREATSIEVE_VECTORIZE_ENABLED === "true" ? "true" : "false";
 if (process.env.THREATSIEVE_AUTH_EMAIL_FROM) {
@@ -89,6 +106,7 @@ const web = JSON.parse(
 web.name = "threatsieve-web-" + stage;
 web.account_id = account;
 web.vars = { API_ORIGIN: apiOrigin };
+web.routes = customDomain(webOrigin);
 web.services = [
   { binding: "WORKER_SELF_REFERENCE", service: web.name },
   { binding: "THREATSIEVE_API", service: config.name },

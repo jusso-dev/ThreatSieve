@@ -38,3 +38,14 @@ For connector health monitoring, set `THREATSIEVE_HEARTBEAT=true` and grant the 
 The OpenCTI helper checkpoints connector state through its periodic heartbeat. An abrupt restart between bundle acceptance and checkpoint persistence can redeliver a page; stable object identities and `update=True` make that safe. ThreatSieve heartbeat success means helper acceptance, not successful destination indexing. Inspect OpenCTI work completion and the destination objects/relationships as a separate acceptance step.
 
 Collection exports include a recorded source or record identifier in every generated STIX external reference. A source name alone is insufficient under STIX 2.1. CI validates both assessment and collection fixtures with the independent `stix2` parser.
+
+## OpenCTI as a ThreatSieve source
+
+ThreatSieve also reads OpenCTI back through its TAXII 2.1 feed adapter, so OpenCTI's own connectors (MITRE ATT&CK, CISA KEV, abuse.ch, OpenCTI datasets) and analyst work appear in ThreatSieve as the **OpenCTI (TAXII 2.1)** source. OpenCTI keeps no public hostname:
+
+- A pinned `cloudflared` container on the OpenCTI host runs the outbound-only `threatsieve-opencti` Cloudflare Tunnel. Its token is `CLOUDFLARE_TUNNEL_TOKEN` in the host configuration secret.
+- The Workers VPC service `threatsieve-opencti` targets OpenCTI's private address (`172.31.49.31:8080`) through that tunnel. The deploy script binds it to the API as `OPENCTI_VPC` when `THREATSIEVE_OPENCTI_VPC_SERVICE_ID` is set; only the TAXII adapter uses it, and it still enforces the configured endpoint host.
+- `infra/opencti/taxii-reader.py REGION SECRET_ARN http://localhost:PORT` (through an SSM port-forward) creates a TAXII-only service account and the `ThreatSieve import` collection. The account's group sees only TLP:CLEAR/GREEN, PAP:CLEAR/GREEN and MITRE statements, so AMBER/RED intelligence never leaves OpenCTI. The collection excludes objects authored by ThreatSieve's own identities, so assessments do not loop back. The reader token (365 days, `OPENCTI_TAXII_TOKEN_EXPIRES_AT`) and collection ID are saved to the host secret.
+- API Worker secrets: `TAXII_ENABLED=true`, `TAXII_ALLOWED_HOST=opencti.threatsieve.internal`, `TAXII_ENDPOINT=https://opencti.threatsieve.internal/taxii2/root/collections/<collection>/objects/`, `TAXII_API_KEY=<reader token>` and optionally `TAXII_PAGE_LIMIT` (default 100; production uses 500 for backfill). The internal hostname only names the VPC request; the tunnel carries it as HTTP to the private origin.
+
+OpenCTI re-keys STIX identifiers. Ingest merges re-keyed vulnerabilities (by CVE) and ATT&CK techniques/tactics (by MITRE ID) into the existing entity, adding provenance and evidence without overwriting the original source's record. Relationships from OpenCTI that point at a re-keyed object keep OpenCTI's STIX identifier.
