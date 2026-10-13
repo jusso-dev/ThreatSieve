@@ -81,3 +81,87 @@ it("merges a re-keyed STIX CVE into the KEV entity without overwriting it", asyn
     "taxii",
   ]);
 });
+
+it("binds TAXII relationships to canonical endpoints in either arrival order", async () => {
+  const now = new Date().toISOString();
+  const canonicalIds = [];
+  for (const [suffix, type, externalId] of [
+    ["technique", "attack-technique", "T1001"],
+    ["tactic", "attack-tactic", "TA0001"],
+  ] as const) {
+    const id = "canonical-" + suffix;
+    canonicalIds.push(id);
+    await ingestRecord(repo, {
+      entity: {
+        id,
+        type,
+        name: externalId,
+        externalId,
+        aliases: [],
+        data: {},
+        provenance: { ...taxii, sourceId: "mitre", sourceName: "MITRE" },
+      },
+      provenance: taxii,
+      relationships: [],
+      evidence: [],
+    });
+  }
+  const relationship = (id: string) => ({
+    id,
+    sourceEntityId: "rekeyed-technique",
+    targetEntityId: "rekeyed-tactic",
+    relationshipType: "USES",
+    assertionType: "source_claimed" as const,
+    confidence: 0.9,
+    sourceIds: [taxii.sourceId],
+    provenance: taxii,
+    createdAt: now,
+    updatedAt: now,
+  });
+  await ingestRecord(repo, {
+    provenance: taxii,
+    relationships: [relationship("early")],
+    evidence: [],
+  });
+  for (const [suffix, type, externalId] of [
+    ["technique", "attack-technique", "T1001"],
+    ["tactic", "attack-tactic", "TA0001"],
+  ] as const) {
+    await ingestRecord(repo, {
+      entity: {
+        id: "rekeyed-" + suffix,
+        type,
+        name: externalId,
+        externalId,
+        aliases: [],
+        data: {},
+        provenance: taxii,
+      },
+      provenance: taxii,
+      relationships: [],
+      evidence: [],
+    });
+  }
+  await ingestRecord(repo, {
+    provenance: taxii,
+    relationships: [relationship("late")],
+    evidence: [],
+  });
+  for (const id of ["early", "late"]) {
+    const row = await db
+      .prepare(
+        "SELECT source_entity_id,target_entity_id,data FROM relationships WHERE id=?",
+      )
+      .bind(id)
+      .first<{
+        source_entity_id: string;
+        target_entity_id: string;
+        data: string;
+      }>();
+    expect([row?.source_entity_id, row?.target_entity_id]).toEqual(
+      canonicalIds,
+    );
+    const edge = JSON.parse(row!.data);
+    expect([edge.sourceEntityId, edge.targetEntityId]).toEqual(canonicalIds);
+  }
+});

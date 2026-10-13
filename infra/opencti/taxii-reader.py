@@ -55,6 +55,15 @@ if secret.get('OPENCTI_TAXII_TOKEN'):
     print('TAXII reader token already provisioned; rotate it explicitly before expiry.')
     sys.exit(0)
 
+# Resolve every excluded author before changing access or issuing a token.
+resolved_authors = {name: named('identities', name) for name in THREATSIEVE_AUTHORS}
+missing_authors = [name for name, author in resolved_authors.items() if author is None]
+if missing_authors:
+    raise RuntimeError('Missing author identities: ' + ', '.join(missing_authors))
+authors = [author['id'] for author in resolved_authors.values()]
+filters = {'mode': 'and', 'filterGroups': [], 'filters': [
+    {'key': ['createdBy'], 'values': authors, 'operator': 'not_eq', 'mode': 'and'}]}
+
 capabilities = {e['node']['name']: e['node']['id'] for e in
     query('{ capabilities(first:500) { edges { node { id name } } } }')['capabilities']['edges']}
 role = named('roles', ROLE) or query('mutation($i:RoleAddInput!) { roleAdd(input:$i) { id name } }',
@@ -80,9 +89,6 @@ user = named('users', USER) or query('mutation($i:UserAddInput!) { userAdd(input
     {'i': {'name': USER, 'user_email': 'threatsieve-taxii@localhost.invalid', 'groups': [group['id']],
            'prevent_default_groups': True, 'user_service_account': True}})['userAdd']
 
-authors = [a['id'] for a in (named('identities', n) for n in THREATSIEVE_AUTHORS) if a]
-filters = {'mode': 'and', 'filterGroups': [], 'filters': [] if not authors else [
-    {'key': ['createdBy'], 'values': authors, 'operator': 'not_eq', 'mode': 'and'}]}
 collection = named('taxiiCollections', COLLECTION) or query(
     'mutation($i:TaxiiCollectionAddInput!) { taxiiCollectionAdd(input:$i) { id name } }',
     {'i': {'name': COLLECTION, 'description': 'Shareable OpenCTI knowledge for ThreatSieve (excludes ThreatSieve-created objects)',

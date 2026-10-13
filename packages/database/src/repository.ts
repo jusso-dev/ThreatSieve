@@ -120,7 +120,28 @@ export class Repository {
   }
   // Records a secondary source on an existing entity without replacing its data.
   async attachSource(entityId: string, e: IntelEntity) {
-    await this.db.batch(this.sourceStatements({ ...e, id: entityId }));
+    await this.db.batch([
+      ...this.sourceStatements({
+        ...e,
+        id: entityId,
+        provenance: {
+          ...e.provenance,
+          sourceRecordId: e.provenance.sourceRecordId ?? e.id,
+        },
+      }),
+      // Relationships can arrive before their endpoint objects in TAXII pages.
+      // Preserve their IDs and immutable assertions, but rebind the visible edge.
+      this.db
+        .prepare(
+          "UPDATE relationships SET source_entity_id=?,data=json_set(data,'$.sourceEntityId',?) WHERE source_entity_id=? AND source_id=?",
+        )
+        .bind(entityId, entityId, e.id, e.provenance.sourceId),
+      this.db
+        .prepare(
+          "UPDATE relationships SET target_entity_id=?,data=json_set(data,'$.targetEntityId',?) WHERE target_entity_id=? AND source_id=?",
+        )
+        .bind(entityId, entityId, e.id, e.provenance.sourceId),
+    ]);
   }
   async putEntity(e: IntelEntity) {
     const statements = this.entityStatements(e);
@@ -256,6 +277,21 @@ export class Repository {
     return rows.results.map((r) => EvidenceSchema.parse(JSON.parse(r.data)));
   }
   async putRelationship(r: IntelRelationship) {
+    // Resolve producer IDs already attached to canonical CVE / ATT&CK entities.
+    const endpoints = await this.db
+      .prepare(
+        "SELECT source_record_id,entity_id FROM entity_sources WHERE source_id=? AND source_record_id IN (?,?)",
+      )
+      .bind(r.provenance.sourceId, r.sourceEntityId, r.targetEntityId)
+      .all<{ source_record_id: string; entity_id: string }>();
+    const canonical = new Map(
+      endpoints.results.map((e) => [e.source_record_id, e.entity_id]),
+    );
+    r = {
+      ...r,
+      sourceEntityId: canonical.get(r.sourceEntityId) ?? r.sourceEntityId,
+      targetEntityId: canonical.get(r.targetEntityId) ?? r.targetEntityId,
+    };
     const observedFirstSeen = r.firstSeen,
       observedLastSeen = r.lastSeen;
     r = {
