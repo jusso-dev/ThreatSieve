@@ -18,8 +18,8 @@ import {
   CheckCheck,
 } from "lucide-react";
 import {
-  useReactTable,
-  getCoreRowModel,
+  useTable,
+  tableFeatures,
   flexRender,
   type ColumnDef,
 } from "@tanstack/react-table";
@@ -33,6 +33,8 @@ import { useViewState, copyText } from "@/lib/view-state";
 import { QueryField, FilterSelect, EmptyResults } from "./filter-controls";
 import { SavedViews } from "./saved-views";
 import { AssessmentFilters } from "../../../packages/schemas/src/query";
+const assessmentTableFeatures = tableFeatures({});
+
 export function Severity({ value }: { value: string }) {
   return (
     <span className={"severity severity-" + value}>
@@ -123,7 +125,7 @@ export function Operations() {
   };
   const filtered = all;
   const priorities = data?.priority ?? [];
-  const columns: ColumnDef<Assessment>[] = [
+  const columns: ColumnDef<typeof assessmentTableFeatures, Assessment>[] = [
     {
       header: "Observable",
       accessorKey: "observable.normalizedValue",
@@ -230,10 +232,10 @@ export function Operations() {
       ),
     },
   ];
-  const table = useReactTable({
+  const table = useTable({
+    features: assessmentTableFeatures,
     data: filtered,
     columns,
-    getCoreRowModel: getCoreRowModel(),
   });
   const submit = async () => {
     if (!observable.trim()) return;
@@ -567,7 +569,7 @@ export function Operations() {
                     <tbody>
                       {table.getRowModel().rows.map((row) => (
                         <tr key={row.id}>
-                          {row.getVisibleCells().map((cell) => (
+                          {row.getAllCells().map((cell) => (
                             <td key={cell.id}>
                               {flexRender(
                                 cell.column.columnDef.cell,
