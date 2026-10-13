@@ -220,6 +220,16 @@ services:
       CONNECTOR_LOG_LEVEL: error
     depends_on:
       opencti: { condition: service_healthy }
+  # Outbound-only tunnel for the ThreatSieve API Worker's Workers VPC binding.
+  # It has no public hostname; only the bound VPC service can reach OpenCTI.
+  cloudflared:
+    <<: *runtime
+    image: cloudflare/cloudflared:2026.10.0
+    command: tunnel --no-autoupdate run
+    environment:
+      TUNNEL_TOKEN: ${CLOUDFLARE_TUNNEL_TOKEN:?}
+    depends_on:
+      opencti: { condition: service_healthy }
 volumes:
   redis:
   elastic:

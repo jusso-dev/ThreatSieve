@@ -8,6 +8,16 @@ import { makeJob } from "../ingest/pipeline";
 import { z } from "zod";
 import { normalise } from "../../packages/intel/src/normalise";
 import { RecordSchema } from "../../packages/schemas/src/index";
+// A Workers VPC binding reaches a private TAXII server (OpenCTI) through its
+// outbound-only Cloudflare Tunnel. The tunnel encrypts that hop, so the private
+// origin is addressed over plain HTTP; endpoint validation still applies.
+export function vpcRequest(binding: Fetcher): typeof fetch {
+  return (input, init) => {
+    const url = new URL(input instanceof Request ? input.url : String(input));
+    url.protocol = "http:";
+    return binding.fetch(url, init);
+  };
+}
 export function getFeed(env: AppEnv, id: string) {
   const names: Record<string, string> = {
     mitre: "MITRE ATT&CK",
@@ -33,7 +43,11 @@ export function getFeed(env: AppEnv, id: string) {
         endpoint: config[prefix + "_ENDPOINT"],
         allowedHost: config[prefix + "_ALLOWED_HOST"],
         apiKey: config[prefix + "_API_KEY"],
+        pageLimit: Number(config[prefix + "_PAGE_LIMIT"] ?? 100),
       },
+      id === "taxii" && env.OPENCTI_VPC
+        ? vpcRequest(env.OPENCTI_VPC)
+        : undefined,
     );
   }
   if (id === "otx")

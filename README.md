@@ -82,7 +82,7 @@ For browser tests, run `pnpm exec e2e-web install chromium` once, then `pnpm tes
 
 ## Production deployment
 
-Hosted workspace: **[ThreatSieve on Cloudflare](https://threatsieve-web-production.yuma-it.workers.dev)**. Sign in with your email and password. Existing administrators use **Forgot password** once to set their password. Invite colleagues from **Team & access**; see [accounts and teams](docs/authentication.md). OpenCTI runs separately on a private EC2 host; see [access and operations](docs/opencti-hosting.md).
+Hosted workspace: **[ThreatSieve on Cloudflare](https://threatsieve.yumait.au)**. Sign in with your email and password. Existing administrators use **Forgot password** once to set their password. Invite colleagues from **Team & access**; see [accounts and teams](docs/authentication.md). OpenCTI runs separately on a private EC2 host; see [access and operations](docs/opencti-hosting.md).
 
 See [deployment](docs/deployment.md) for resource provisioning, migration review, secrets, staging and protected production releases. The checked-in D1 identifier is local-only and the deployment script requires a real ID. Nothing deploys to a Cloudflare account merely by installing or building the project.
 

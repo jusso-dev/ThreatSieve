@@ -12,7 +12,15 @@ export async function ingestRecord(
 ) {
   const record = RecordSchema.parse(input);
   let id = record.entity?.id;
-  if (record.entity) await repo.putEntity(record.entity);
+  if (record.entity) {
+    // Keep one entity per CVE / ATT&CK ID: a re-keyed copy from another STIX
+    // producer adds provenance and evidence without overwriting the original.
+    const canonical = await repo.canonicalEntityId(record.entity);
+    if (canonical && canonical !== record.entity.id) {
+      id = canonical;
+      await repo.attachSource(canonical, record.entity);
+    } else await repo.putEntity(record.entity);
+  }
   if (record.observable) {
     const observable = await normalise(
       record.observable.value,

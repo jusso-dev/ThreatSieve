@@ -22,12 +22,9 @@ import {
   Crosshair,
   BookOpen,
   ListChecks,
-  FolderSearch,
   Eye,
   Layers,
   FileText,
-  Workflow,
-  ScanEye,
   Activity,
 } from "lucide-react";
 import { AccessContext } from "@/lib/access";
@@ -42,12 +39,9 @@ const navigation = [
     href: "/requirements",
     icon: ListChecks,
   },
-  { name: "Investigations", href: "/cases", icon: FolderSearch },
   { name: "Watchlists", href: "/watchlists", icon: Eye },
   { name: "Collections", href: "/collections", icon: Layers },
   { name: "Reports", href: "/reports", icon: FileText },
-  { name: "Sightings", href: "/sightings", icon: ScanEye },
-  { name: "Automation", href: "/automations", icon: Workflow },
   { name: "Threat clusters", href: "/clusters", icon: Network },
   { name: "Intelligence sources", href: "/sources", icon: Database },
   { name: "Bulk analysis", href: "/bulk", icon: Upload },
@@ -338,7 +332,7 @@ function WorkspaceShell({ children }: { children: React.ReactNode }) {
             Workspace <span>/</span>{" "}
             <strong>
               {path.startsWith("/investigations")
-                ? "Investigation"
+                ? "Assessment"
                 : path.startsWith("/intelligence")
                   ? "Intelligence library"
                   : (navigation.find(

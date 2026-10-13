@@ -1,7 +1,6 @@
 "use client";
 import Link from "next/link";
 import { EntityTags } from "./entity-tags";
-import { usePermission } from "@/lib/access";
 import { useState } from "react";
 import { ArrowLeft, Copy } from "lucide-react";
 import { useApi } from "@/lib/api";
@@ -14,16 +13,13 @@ import { Button } from "./ui/button";
 import { EvidenceExplorer } from "./evidence-explorer";
 import { IntelligenceGraph } from "./intelligence-graph";
 import { PinToWorkspace } from "./workspace-references";
-import { SightingForm } from "./sightings";
 
 export function IntelligenceCard({ id }: { id: string }) {
   const { data, error, loading, reload } = useApi<Dossier>(
     "v1/entities/" + encodeURIComponent(id) + "/dossier",
   );
-  const canWrite = usePermission("assessment:write");
   const [tab, setTab] = useState("overview"),
-    [days, setDays] = useState("30"),
-    [sighting, setSighting] = useState(false);
+    [days, setDays] = useState("30");
   if (!data || loading || error)
     return <DataState loading={loading} error={error} />;
   const e = data.entity,
@@ -110,23 +106,14 @@ export function IntelligenceCard({ id }: { id: string }) {
           <dt>Source assertions</dt>
           <dd>{data.provenance.length}</dd>
         </div>
-        <div>
-          <dt>Tenant sightings</dt>
-          <dd>
-            {data.sightings.reduce((n, x) => n + x.count, 0)}
-            {data.truncated ? " (bounded view)" : ""}
-          </dd>
-        </div>
       </dl>
       <nav className="dossier-tabs" aria-label="Intelligence dossier sections">
         {[
           "overview",
           "relationships",
           "evidence",
-          "sightings",
           "timeline",
           "attack",
-          "investigations",
           "history",
         ].map((t) => (
           <button key={t} aria-pressed={tab === t} onClick={() => setTab(t)}>
@@ -246,28 +233,31 @@ export function IntelligenceCard({ id }: { id: string }) {
               ))}
               {!a && (
                 <p>
-                  Assess this observable or add it to an investigation before
-                  making an operational decision.
+                  Assess this observable before making an operational decision.
                 </p>
               )}
             </section>
             <section className="work-section">
               <h2>Organisational memory</h2>
-              {data.related.map((o) => (
-                <Link
-                  className="dossier-work-link"
-                  key={o.id}
-                  href={"/" + workspaces[o.kind].path + "/" + o.id}
-                >
-                  {o.title}
-                  <small>
-                    {o.kind} · {o.status}
-                  </small>
-                </Link>
-              ))}
+              {data.related
+                .filter(
+                  (o) => o.kind !== "investigation" && o.kind !== "playbook",
+                )
+                .map((o) => (
+                  <Link
+                    className="dossier-work-link"
+                    key={o.id}
+                    href={"/" + workspaces[o.kind].path + "/" + o.id}
+                  >
+                    {o.title}
+                    <small>
+                      {o.kind} · {o.status}
+                    </small>
+                  </Link>
+                ))}
               {!data.related.length && (
                 <p>
-                  No requirements, watchlists or investigations reference this
+                  No requirements, watchlists or collections reference this
                   entity yet.
                 </p>
               )}
@@ -282,53 +272,6 @@ export function IntelligenceCard({ id }: { id: string }) {
           selectedIds={[]}
           onClear={() => {}}
         />
-      )}
-      {tab === "sightings" && (
-        <section className="work-section">
-          <div className="section-title">
-            <h2>Customer sightings</h2>
-            {e.type === "observable" && (
-              <Button
-                variant="outline"
-                disabled={!canWrite}
-                onClick={() => setSighting(true)}
-              >
-                Record sighting
-              </Button>
-            )}
-          </div>
-          <p className="muted">
-            Observations in this workspace. A sighting does not establish
-            maliciousness.
-          </p>
-          <table className="intel-table">
-            <thead>
-              <tr>
-                <th>Observed</th>
-                <th>Source</th>
-                <th>Asset</th>
-                <th>Count</th>
-                <th>Context</th>
-              </tr>
-            </thead>
-            <tbody>
-              {data.sightings.map((x) => (
-                <tr key={x.id}>
-                  <td>{absoluteTime(x.observedAt)}</td>
-                  <td>{x.source}</td>
-                  <td>{x.asset || "Not supplied"}</td>
-                  <td>{x.count}</td>
-                  <td>{x.context}</td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-          {!data.sightings.length && (
-            <p className="work-empty">
-              No sightings have been recorded for this entity.
-            </p>
-          )}
-        </section>
       )}
       {(tab === "timeline" || tab === "history") && (
         <section className="work-section">
@@ -420,41 +363,11 @@ export function IntelligenceCard({ id }: { id: string }) {
           )}
         </section>
       )}
-      {tab === "investigations" && (
-        <section className="work-section">
-          <h2>Linked investigations</h2>
-          {data.related
-            .filter((o) => o.kind === "investigation")
-            .map((o) => (
-              <Link
-                className="dossier-work-link"
-                key={o.id}
-                href={"/cases/" + o.id}
-              >
-                {o.title}
-                <small>{o.status}</small>
-              </Link>
-            ))}
-          <PinToWorkspace
-            reference={{ type: "entity", id, relation: "investigates" }}
-          />
-        </section>
-      )}
       {data.truncated && (
         <p className="notice">
           This dossier is a bounded view. Open individual sources, assessments
           and related records for additional context.
         </p>
-      )}
-      {sighting && (
-        <SightingForm
-          observable={e.name}
-          onClose={() => setSighting(false)}
-          onSaved={() => {
-            setSighting(false);
-            void reload();
-          }}
-        />
       )}
     </>
   );

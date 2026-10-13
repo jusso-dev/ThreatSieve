@@ -6,4 +6,6 @@ export type AppEnv = {
     BETTER_AUTH_SECRET?: string;
     INTEGRATION_TARGETS?: string;
     INTEGRATION_SECRETS?: string;
+    // Optional Workers VPC service for a private TAXII server; see docs/opencti.md.
+    OPENCTI_VPC?: Fetcher;
   };

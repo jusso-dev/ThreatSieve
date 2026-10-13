@@ -15,6 +15,8 @@ export interface OptionalFeedConfig {
   endpoint?: string;
   allowedHost?: string;
   format?: "stix" | "misp" | "text" | "csv" | "json";
+  /** TAXII objects per page (1-1000); servers may cap it lower. Default 100. */
+  pageLimit?: number;
 }
 export class OptionalFeed extends PublicFeed {
   constructor(
@@ -119,7 +121,18 @@ export class OptionalFeed extends PublicFeed {
             z.iso.datetime().parse(resume?.from ?? cursor),
           );
         if (resume) url.searchParams.set("next", resume.next);
-        url.searchParams.set("limit", "100");
+        url.searchParams.set(
+          "limit",
+          String(
+            z
+              .number()
+              .int()
+              .min(1)
+              .max(1000)
+              .catch(100)
+              .parse(this.config.pageLimit),
+          ),
+        );
       }
       if (this.config.apiKey)
         headers.Authorization = "Bearer " + this.config.apiKey;

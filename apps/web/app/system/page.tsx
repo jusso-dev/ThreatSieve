@@ -90,8 +90,8 @@ function SystemHealth() {
           </section>
           <section className="work-section">
             <h2>Intelligence collection</h2>
-            <div className="table-scroll">
-              <table className="work-table">
+            <div className="table-scroll work-table">
+              <table className="intel-table">
                 <thead>
                   <tr>
                     <th>Source</th>
@@ -137,8 +137,8 @@ function SystemHealth() {
               Pending and failed work, plus completions in the last 24 hours.
               Queue age measures the original enqueue time, including retries.
             </p>
-            <div className="table-scroll">
-              <table className="work-table">
+            <div className="table-scroll work-table">
+              <table className="intel-table">
                 <thead>
                   <tr>
                     <th>Stage</th>
@@ -189,8 +189,8 @@ function SystemHealth() {
               through its helper. Confirm indexing in OpenCTI separately.
             </p>
             {data.integrations.length ? (
-              <div className="table-scroll">
-                <table className="work-table">
+              <div className="table-scroll work-table">
+                <table className="intel-table">
                   <thead>
                     <tr>
                       <th>Connector</th>
