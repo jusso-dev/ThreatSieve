@@ -201,8 +201,27 @@ export const EnvironmentSchema = z.object({
   securityProducts: z.array(z.string().max(200)).max(100).default([]),
   vips: z.array(z.string().max(200)).max(100).default([]),
   exposedServices: z.array(z.string().max(200)).max(100).default([]),
+  // leaf-1.3.2 additive
+  assets: z
+    .array(
+      z.object({
+        id: z.string().max(200),
+        name: z.string().max(200),
+        product: z.string().max(200),
+        version: z.string().max(100).optional(),
+        vendor: z.string().max(200).optional(),
+        criticality: z.enum(["critical", "high", "medium", "low"]),
+        internetExposed: z.boolean().optional(),
+        owner: z.string().max(200).optional(),
+        inventoryFreshness: z.string().max(40).optional(),
+        lastSeenAt: z.string().max(40).optional(),
+      }),
+    )
+    .max(500)
+    .default([]),
 });
 export type CustomerEnvironment = z.infer<typeof EnvironmentSchema>;
+export type EnvironmentAsset = CustomerEnvironment["assets"][number];
 export interface EvidenceBundle {
   observable: Observable;
   evidence: Evidence[];
@@ -240,6 +259,17 @@ export const reasonCodes = [
   "CONFLICTING_SOURCES",
   "LOW_EVIDENCE",
   "SHARED_INFRASTRUCTURE",
+  // leaf-1.1.2 additive
+  "FRESH_EVIDENCE_REQUIRED",
+  "EXPIRED_INDICATOR",
+  "HISTORICAL_ASSOCIATION_ONLY",
+  // leaf-1.2.3 additive
+  "SINGLE_SOURCE_SUPPORT",
+  "EVIDENCE_RELIABILITY",
+  "EVIDENCE_STRENGTH",
+  "CLASSIFIER_DECISIVENESS",
+  "DIRECT_EVIDENCE",
+  "TRUNCATED_EVIDENCE",
 ] as const;
 export type ReasonCode = (typeof reasonCodes)[number];
 export interface ConfidenceFactor {

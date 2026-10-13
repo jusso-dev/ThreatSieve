@@ -137,6 +137,55 @@ export const WorkInput = z.discriminatedUnion("kind", [
       ])
       .default("threat-brief"),
     body: z.string().max(50000).default(""),
+    // leaf-1.4.2 additive
+    claims: z
+      .array(
+        z.object({
+          text: z.string().trim().min(1).max(5000),
+          sourceRefs: z.array(z.string().min(1).max(200)).max(50).default([]),
+        }),
+      )
+      .max(200)
+      .default([]),
+    // leaf-1.4.2 additive
+    tlp: z
+      .enum(["clear", "green", "amber", "amber+strict", "red"])
+      .default("clear"),
+    // leaf-1.4.2 additive
+    audience: list,
+    // leaf-1.4.2 additive
+    approvedBy: z.string().trim().max(200).optional(),
+    // leaf-1.4.2 additive
+    approvedAt: z.iso.datetime().optional(),
+    // leaf-1.4.2 additive
+    publishedRevisions: z
+      .array(
+        z.object({
+          revision: z.number().int().positive(),
+          publishedAt: z.iso.datetime(),
+          reason: z.string().max(2000),
+          title: z.string().max(200),
+          body: z.string().max(50000),
+          claims: z
+            .array(
+              z.object({
+                text: z.string().trim().min(1).max(5000),
+                sourceRefs: z
+                  .array(z.string().min(1).max(200))
+                  .max(50)
+                  .default([]),
+              }),
+            )
+            .max(200)
+            .default([]),
+          tlp: z.enum(["clear", "green", "amber", "amber+strict", "red"]),
+          audience: z.array(z.string()).max(50).default([]),
+          approvedBy: z.string().max(200).optional(),
+          approvedAt: z.iso.datetime().optional(),
+        }),
+      )
+      .max(100)
+      .default([]),
   }),
   z.object({
     ...common,

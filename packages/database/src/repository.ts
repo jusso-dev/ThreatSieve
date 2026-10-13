@@ -24,7 +24,15 @@ import {
   assessmentOrders,
   attentionPredicate,
   reviewPredicate,
+  urgencySql,
+  evidencePresentPredicate,
+  evidenceAbsentPredicate,
 } from "./assessment-query";
+import {
+  effectiveClassificationSql,
+  effectiveDecision,
+  effectiveRecommendations,
+} from "./decision-state";
 import { AssessmentFilters, EntityFilters } from "../../schemas/src/query";
 export class Repository {
   constructor(readonly db: D1Database) {}
@@ -314,34 +322,34 @@ export class Repository {
         provenance: { ...r.provenance, retrievedAt: undefined },
       }),
     );
-    await this.db
-      .prepare(
-        "INSERT OR IGNORE INTO relationship_assertions VALUES(?,?,?,?,?)",
-      )
-      .bind(
-        assertionId,
-        r.id,
-        r.provenance.sourceId,
-        JSON.stringify(r),
-        r.updatedAt,
-      )
-      .run();
-    await this.db
-      .prepare(
-        "INSERT INTO relationships(id,source_entity_id,target_entity_id,relationship_type,assertion_type,confidence,source_id,data,created_at) VALUES(?,?,?,?,?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET data=excluded.data,confidence=excluded.confidence,source_id=excluded.source_id,source_entity_id=excluded.source_entity_id,target_entity_id=excluded.target_entity_id,relationship_type=excluded.relationship_type,assertion_type=excluded.assertion_type",
-      )
-      .bind(
-        r.id,
-        r.sourceEntityId,
-        r.targetEntityId,
-        r.relationshipType,
-        r.assertionType,
-        r.confidence,
-        r.provenance.sourceId,
-        JSON.stringify(r),
-        r.createdAt,
-      )
-      .run();
+    await this.db.batch([
+      this.db
+        .prepare(
+          "INSERT OR IGNORE INTO relationship_assertions VALUES(?,?,?,?,?)",
+        )
+        .bind(
+          assertionId,
+          r.id,
+          r.provenance.sourceId,
+          JSON.stringify(r),
+          r.updatedAt,
+        ),
+      this.db
+        .prepare(
+          "INSERT INTO relationships(id,source_entity_id,target_entity_id,relationship_type,assertion_type,confidence,source_id,data,created_at) VALUES(?,?,?,?,?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET data=excluded.data,confidence=excluded.confidence,source_id=excluded.source_id,source_entity_id=excluded.source_entity_id,target_entity_id=excluded.target_entity_id,relationship_type=excluded.relationship_type,assertion_type=excluded.assertion_type",
+        )
+        .bind(
+          r.id,
+          r.sourceEntityId,
+          r.targetEntityId,
+          r.relationshipType,
+          r.assertionType,
+          r.confidence,
+          r.provenance.sourceId,
+          JSON.stringify(r),
+          r.createdAt,
+        ),
+    ]);
   }
   async edges(
     entityId: string,
@@ -424,6 +432,11 @@ export class Repository {
     const [value, id] = sortedCursor(cursor, filters.sort);
     const order = assessmentOrders[filters.sort];
     const predicates = ["tenant_id=?", assessmentFilter(filters.view)];
+    if (filters.sort === "relevance")
+      // leaf-1.2.2: urgency-ranked surfaces never rank insufficient-evidence
+      // items — unknown is not low. They route to the enrichment backlog
+      // (assessmentSummary.enrichment_backlog) instead of occupying queue slots.
+      predicates.push(evidencePresentPredicate);
     const args: (string | number | null)[] = [tenantId];
     const add = (sql: string, value: string | number | undefined) => {
       if (value !== undefined) {
@@ -437,10 +450,7 @@ export class Repository {
         filters.q.toLowerCase(),
       );
     add("severity=?", filters.severity);
-    add(
-      "COALESCE(json_extract(data,'$.effective_classification'),json_extract(data,'$.malicious.classification'))=?",
-      filters.classification,
-    );
+    add(effectiveClassificationSql + "=?", filters.classification);
     add("json_extract(data,'$.observable.type')=?", filters.observable_type);
     add("status=?", filters.status);
     add("json_extract(data,'$.confidence')>=?", filters.min_confidence);
@@ -451,10 +461,24 @@ export class Repository {
         : Number(filters.observed === "yes"),
     );
     if (value !== null) {
-      predicates.push(
-        `(${order.column}${order.direction === "DESC" ? "<" : ">"}? OR (${order.column}=? AND id>?))`,
-      );
-      args.push(value, value, id);
+      if (filters.sort === "relevance") {
+        // leaf-1.2.2: the urgency key is COMPUTED, so the keyset boundary is
+        // resolved inside SQL — against the cursor row's own urgency value —
+        // instead of comparing a TypeScript-computed number with SQL
+        // arithmetic. Pagination stays exact even if the two roundings ever
+        // disagree at a bucket edge; the encoded `value` is only the fallback
+        // when the cursor row has since disappeared.
+        const at = `COALESCE((SELECT ${urgencySql} FROM assessments WHERE id=? AND tenant_id=?),?)`;
+        predicates.push(
+          `((${urgencySql})<${at} OR ((${urgencySql})=${at} AND id>?))`,
+        );
+        args.push(id, tenantId, value, id, tenantId, value, id);
+      } else {
+        predicates.push(
+          `(${order.column}${order.direction === "DESC" ? "<" : ">"}? OR (${order.column}=? AND id>?))`,
+        );
+        args.push(value, value, id);
+      }
     }
     const rows = await this.db
       .prepare(
@@ -562,17 +586,39 @@ export class Repository {
         high: number;
         review: number;
       }>();
+    // leaf-1.2.2 (audit finding 5): the actionable queue ranks by operational
+    // urgency (urgencySql, mirroring packages/enterprise/src/urgency.ts) —
+    // never by the raw model relevance score. Assessments with zero evidence
+    // are UNKNOWN, not low: they are excluded from the priority queue and
+    // listed in the enrichment backlog instead.
     const priority = await this.db
       .prepare(
         "SELECT data FROM assessments WHERE tenant_id=? AND " +
           attentionPredicate +
-          " ORDER BY json_extract(data,'$.customer.relevance') DESC,created_at DESC,id LIMIT 3",
+          " AND " +
+          evidencePresentPredicate +
+          " ORDER BY " +
+          urgencySql +
+          " DESC,id LIMIT 3",
+      )
+      .bind(tenantId)
+      .all<{ data: string }>();
+    const backlog = await this.db
+      .prepare(
+        "SELECT data FROM assessments WHERE tenant_id=? AND " +
+          attentionPredicate +
+          " AND " +
+          evidenceAbsentPredicate +
+          " ORDER BY created_at DESC,id LIMIT 20",
       )
       .bind(tenantId)
       .all<{ data: string }>();
     return {
       summary: counts!,
       priority: priority.results.map(
+        (row) => JSON.parse(row.data) as Assessment,
+      ),
+      enrichment_backlog: backlog.results.map(
         (row) => JSON.parse(row.data) as Assessment,
       ),
     };
@@ -706,7 +752,7 @@ export class Repository {
           job.jobId,
           queue,
           JSON.stringify(job),
-          job.createdAt,
+          new Date().toISOString(),
           gate.feedbackId ?? null,
           gate.feedbackId ?? null,
           gate.requestKey ?? null,
@@ -862,22 +908,48 @@ export class Repository {
         analystId: p.userId,
         createdAt: now,
       };
+    } else if (field !== "assessment") {
+      // A confirmation or rejection carrying a field override is a
+      // modification in disguise. Recording the override in the audit trail
+      // without applying it would leave the analyst record disagreeing with
+      // the effective decision; a genuine confirmation decides the assessment
+      // exactly as it stands.
+      throw new AppError(
+        "INVALID_OVERRIDE",
+        422,
+        "Apply decision changes with modify, then confirm the result",
+      );
     }
+    // One effective decision (decision-state.ts) drives the derived state
+    // below; the model output on `a` is history and is never overwritten.
+    // `human_review` is cleared only by a genuine analyst confirmation — every
+    // other analyst action keeps or raises it — and a cleared flag must never
+    // be read as "confidence gates passed": that claim belongs to automatic
+    // gates alone (see automaticGatesPassed).
     if (decision === "confirmed") updated.human_review = false;
     if (
       decision === "rejected" ||
       decision === "needs-investigation" ||
       decision === "modified"
-    ) {
+    )
       updated.human_review = true;
-      updated.recommended_actions = [
-        {
-          action: "investigate",
-          confidence: a.confidence,
-          reason_codes: a.reason_codes,
-        },
-      ];
-    }
+    updated.recommended_actions = effectiveRecommendations(updated);
+    // Exactly one effective decision at a time: an applied override must have
+    // become THE effective decision, never a second disagreeing one.
+    const effective = effectiveDecision(updated);
+    if (
+      updated.analyst_decision &&
+      (effective.source !== "analyst" ||
+        (updated.analyst_decision.field === "malicious" &&
+          effective.classification !== updated.effective_classification) ||
+        (updated.analyst_decision.field === "role" &&
+          effective.role !== updated.effective_role))
+    )
+      throw new AppError(
+        "DECISION_STATE_CONFLICT",
+        500,
+        "Analyst override did not become the effective decision",
+      );
     const originalFields: Record<string, unknown> = {
       assessment: a,
       malicious: a.malicious,

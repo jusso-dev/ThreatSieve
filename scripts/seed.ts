@@ -11,7 +11,7 @@ async function main() {
   );
   writeFileSync(
     "artifacts/demo.stix.json",
-    JSON.stringify(exportStix(firstAssessment), null, 2),
+    JSON.stringify(exportStix(firstAssessment, { audience: "research" }), null, 2),
   );
   writeFileSync("artifacts/seed.local.sql", statements.join("\n"));
   execFileSync(

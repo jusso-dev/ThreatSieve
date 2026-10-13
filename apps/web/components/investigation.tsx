@@ -23,6 +23,15 @@ import { Modal } from "./ui/modal";
 import { Button } from "./ui/button";
 import { Severity } from "./operations";
 import type { Assessment } from "../../../packages/schemas/src/index";
+import {
+  effectiveDecision,
+  effectiveRecommendations,
+  automaticGatesPassed,
+} from "../../../packages/database/src/decision-state";
+import {
+  freshness,
+  reassessmentTrigger,
+} from "../../../packages/intel/src/freshness";
 import { IntelligenceGraph } from "./intelligence-graph";
 import { EvidenceExplorer } from "./evidence-explorer";
 import { copyText, defang } from "@/lib/view-state";
@@ -52,8 +61,36 @@ export function Investigation({
   const [reassessmentJob, setReassessmentJob] = useState("");
   if (loading || error || !a)
     return <DataState loading={loading} error={error} />;
+  // Indicator activity is derived from evidence observation times only
+  // (packages/intel/src/freshness.ts) — never from processing time.
+  const freshnessState = freshness(a.evidence);
+  const reassess = reassessmentTrigger(freshnessState);
+  // One effective decision drives every derived line below; the model output
+  // is rendered separately as history (packages/database/src/decision-state.ts).
+  const decision = effectiveDecision(a);
+  const decidedWhen =
+    a.analyst_decision?.createdAt ?? a.updated_at ?? a.created_at;
+  const queueReassessment = () => {
+    setReassessing(true);
+    void api<{ job_id: string }>("v1/assessments/" + id + "/reclassify", {
+      method: "POST",
+    })
+      .then((r) => setReassessmentJob(r.job_id))
+      .catch((e) =>
+        setMessage(
+          e instanceof Error
+            ? e.message
+            : "We couldn’t queue reclassification. Please try again.",
+        ),
+      )
+      .finally(() => setReassessing(false));
+  };
   const beginFeedback = (action: string) => {
     setFeedbackError("");
+    // The modify dialog starts from the current effective classification —
+    // never from an unrelated default that reads as a recommendation.
+    if (action === "modify")
+      setOverride(a.effective_classification ?? a.malicious.classification);
     setFeedback(action);
   };
   const save = async () => {
@@ -95,27 +132,43 @@ export function Investigation({
           <div className="investigation-meta">
             <span
               className={
-                (a.effective_classification ?? a.malicious.classification) ===
-                "malicious"
+                decision.classification === "malicious"
                   ? "text-red"
                   : "text-amber"
               }
             >
-              {(
-                a.effective_classification ?? a.malicious.classification
-              ).toUpperCase()}{" "}
-              {a.effective_classification
+              {decision.classification.toUpperCase()}{" "}
+              {decision.source === "analyst"
                 ? "· analyst decision"
-                : percent(a.malicious.probability)}
+                : percent(a.malicious.probability) + " model probability"}
             </span>
             <span>·</span>
             <span>
-              {(a.effective_role ?? a.role.value) === "c2"
+              {decision.role === "c2"
                 ? "Command & control"
-                : (a.effective_role ?? a.role.value)}
+                : (decision.role ?? "unknown")}
             </span>
             <span>·</span>
-            <span>{percent(a.confidence)} confidence</span>
+            <span>{percent(a.confidence)} overall confidence</span>
+            <span>·</span>
+            <span
+              className={
+                freshnessState.activity === "active"
+                  ? "text-green"
+                  : "text-amber"
+              }
+            >
+              {freshnessState.activity.toUpperCase()}
+            </span>
+            {freshnessState.activity !== "active" && (
+              <span className="tag">
+                {freshnessState.activity === "expired"
+                  ? "EXPIRED INDICATOR"
+                  : freshnessState.activity === "stale"
+                    ? "STALE EVIDENCE"
+                    : "ACTIVITY UNKNOWN"}
+              </span>
+            )}
           </div>
         </div>
         <div className="actions">
@@ -166,22 +219,7 @@ export function Investigation({
           <Button
             variant="outline"
             disabled={!canWrite || reassessing}
-            onClick={() => {
-              setReassessing(true);
-              void api<{ job_id: string }>(
-                "v1/assessments/" + id + "/reclassify",
-                { method: "POST" },
-              )
-                .then((r) => setReassessmentJob(r.job_id))
-                .catch((e) =>
-                  setMessage(
-                    e instanceof Error
-                      ? e.message
-                      : "We couldn’t queue reclassification. Please try again.",
-                  ),
-                )
-                .finally(() => setReassessing(false));
-            }}
+            onClick={queueReassessment}
           >
             <RefreshCw size={14} />
             Reassess
@@ -203,14 +241,51 @@ export function Investigation({
           {message}
         </div>
       )}
-      {a.analyst_decision && (
+      {reassess.trigger && (
+        <div className="notice" role="status">
+          <strong>Expired indicator · historical association only.</strong>
+          <p>
+            The newest evidence observation is{" "}
+            {freshnessState.last_observed
+              ? relativeTime(freshnessState.last_observed)
+              : "unknown"}
+            . Historical malicious associations are retained, but fresh
+            evidence is required before this indicator is treated as a current
+            threat ({reassess.reason_codes.join(", ")}).
+          </p>
+          <Button
+            size="sm"
+            variant="outline"
+            disabled={!canWrite || reassessing}
+            onClick={queueReassessment}
+          >
+            <RefreshCw size={14} />
+            Reassess
+          </Button>
+        </div>
+      )}
+      {(decision.source === "analyst" || a.status !== "pending") && (
         <div className="notice">
           <strong>
-            Analyst override: {a.analyst_decision.field} →{" "}
-            {String(a.analyst_decision.value)}
+            {a.status === "confirmed"
+              ? "Analyst confirmed: " + decision.classification
+              : a.status === "modified"
+                ? "Analyst set: " + decision.classification
+                : a.status === "rejected"
+                  ? "Analyst rejected the model assessment"
+                  : "Analyst set: needs investigation"}
+            {a.analyst_decision?.field === "role"
+              ? " · role " + String(a.analyst_decision.value)
+              : ""}{" "}
+            ({decidedWhen})
           </strong>
-          <p>{a.analyst_decision.reason}</p>
-          <small>Original model probabilities remain visible below.</small>
+          {a.analyst_decision?.reason && <p>{a.analyst_decision.reason}</p>}
+          <small>
+            Model assessment (history): {a.malicious.classification} ·{" "}
+            {percent(a.malicious.probability)} model probability ·{" "}
+            {percent(a.confidence)} overall confidence. Model output remains
+            unchanged.
+          </small>
         </div>
       )}
       <nav className="investigation-jumps" aria-label="Investigation sections">
@@ -232,16 +307,23 @@ export function Investigation({
             <div className="decision-layout">
               <div>
                 {[
-                  ["Malicious", a.malicious.probability],
+                  ["Malicious", "Model probability (0–1)", a.malicious.probability],
                   [
                     a.role.value === "c2" ? "Command & control" : a.role.value,
+                    "Model probability (0–1)",
                     a.role.probability,
                   ],
-                  ["Human review", a.human_review_probability],
-                ].map(([label, value]) => (
+                  [
+                    "Human review",
+                    "Model probability (0–1)",
+                    a.human_review_probability,
+                  ],
+                ].map(([label, quantity, value]) => (
                   <div key={String(label)}>
                     <div className="probability-row">
-                      <span>{label}</span>
+                      <span>
+                        {label} <small>{quantity}</small>
+                      </span>
                       <strong>{percent(Number(value))}</strong>
                     </div>
                     <div
@@ -260,14 +342,23 @@ export function Investigation({
                     : a.status.toUpperCase()}
                 </span>
                 <p className="tooltip-note">
-                  {a.human_review
-                    ? "The evidence gate requires analyst review before acting on this assessment."
-                    : "The assessment passed the configured confidence and review gates."}
+                  {automaticGatesPassed(a)
+                    ? "Automatic confidence and review gates passed; no analyst decision is recorded."
+                    : a.human_review
+                      ? "The evidence gate requires analyst review before acting on this assessment."
+                      : decision.source === "analyst" || a.status === "confirmed"
+                        ? "This assessment carries an analyst decision. Automatic confidence gates do not apply to it."
+                        : "Automatic gates did not pass: insufficient evidence or confidence for an automatic decision."}
                 </p>
                 <div className="detail-row">
-                  <span>Evidence strength</span>
+                  <span>Overall confidence</span>
                   <strong>{percent(a.confidence)}</strong>
                 </div>
+                <p className="tooltip-note">
+                  Overall confidence is a composite policy score (weighted
+                  factors clamped to 0–1, listed below), not a calibrated
+                  probability.
+                </p>
                 <div className="detail-row">
                   <span>Classifier</span>
                   <strong className="mono">
@@ -280,6 +371,39 @@ export function Investigation({
                   <span>Assessed</span>
                   <strong>{relativeTime(a.created_at)}</strong>
                 </div>
+                <div className="detail-row">
+                  <span>Last actual observation</span>
+                  <strong>
+                    {freshnessState.last_observed
+                      ? relativeTime(freshnessState.last_observed)
+                      : "Unknown"}
+                  </strong>
+                </div>
+                <div className="detail-row">
+                  <span>Indicator activity</span>
+                  <strong
+                    className={
+                      freshnessState.activity === "active"
+                        ? "text-green"
+                        : "text-amber"
+                    }
+                  >
+                    {freshnessState.activity === "unknown"
+                      ? "Unknown"
+                      : freshnessState.activity}
+                  </strong>
+                </div>
+                {freshnessState.activity !== "active" && (
+                  <p className="tooltip-note text-amber">
+                    {freshnessState.activity === "expired"
+                      ? "Expired: the newest evidence observation is past the 90-day validity window. Historical malicious association only."
+                      : freshnessState.activity === "stale"
+                        ? "Stale: the newest evidence observation is past 30 days, or its source reported the infrastructure offline at collection."
+                        : "Activity unknown: the evidence carries no observation dates."}
+                    {freshnessState.stale_reasons.length > 0 &&
+                      " (" + freshnessState.stale_reasons.join(", ") + ")"}
+                  </p>
+                )}
               </div>
             </div>
             <details>
@@ -357,6 +481,10 @@ export function Investigation({
                 {percent(a.customer.relevance)}
               </strong>
             </div>
+            <p className="tooltip-note">
+              Customer relevance is a heuristic policy score (0–1), not a
+              calibrated probability.
+            </p>
             <div className="detail-row">
               <span>Observed internally</span>
               <strong className={a.customer.observed ? "text-green" : ""}>
@@ -442,13 +570,16 @@ export function Investigation({
           <section className="panel">
             <h2>Recommended actions</h2>
             <div className="action-list">
-              {a.recommended_actions.map((action) => (
+              {effectiveRecommendations(a).map((action) => (
                 <span className="tag" key={action.action}>
                   {action.action.toUpperCase()}
                 </span>
               ))}
             </div>
             <p className="tooltip-note">
+              {decision.source === "analyst" || a.status === "confirmed"
+                ? "Derived from the analyst decision. "
+                : "Derived from the model assessment. "}
               Recommendations only. ThreatSieve does not block or isolate
               infrastructure.
             </p>

@@ -42,6 +42,11 @@ import {
 } from "../../../packages/schemas/src/query";
 import { Repository } from "../../../packages/database/src/repository";
 import {
+  browseCanonicalEntities,
+  canonicalEntities,
+  latestAssessmentPerObservable,
+} from "../../../packages/database/src/canonical";
+import {
   AppError,
   errorType,
   log,
@@ -487,16 +492,52 @@ app.get("/v1/jobs/:id", scope("assessment:read"), async (c) => {
     (row) => row.status === "queued" || row.status === "running",
   );
   const failed = counts.results.some((row) => row.status === "failed");
-  const totals = await c.env.DB.prepare(
-    "SELECT COALESCE(SUM(json_extract(result,'$.processed')),0) AS processed,COALESCE(SUM(json_array_length(json_extract(result,'$.errors'))),0) AS rejected FROM pipeline_jobs WHERE tenant_id=? AND stage='bulk' AND (json_extract(data,'$.payload.bulkId')=? OR json_extract(data,'$.payload.rootId')=? OR id=?)",
+  // Cumulative diagnostics live on each bulk page result (payload-carried).
+  // Pick the furthest page by processed — do not SUM cumulative pages.
+  const bulkRows = await c.env.DB.prepare(
+    "SELECT result FROM pipeline_jobs WHERE tenant_id=? AND stage='bulk' AND (json_extract(data,'$.payload.bulkId')=? OR json_extract(data,'$.payload.rootId')=? OR id=?)",
   )
     .bind(tenant, id, id, id)
-    .first<{ processed: number; rejected: number }>();
+    .all<{ result: string | null }>();
+  let processed = 0;
+  let accepted = 0;
+  let duplicates = 0;
+  let rejected = 0;
+  let errors: { index: number; error: string }[] = [];
+  for (const row of bulkRows.results) {
+    if (!row.result) continue;
+    let parsed: Record<string, unknown>;
+    try {
+      parsed = JSON.parse(row.result) as Record<string, unknown>;
+    } catch {
+      continue;
+    }
+    const pageProcessed = Number(parsed.processed ?? 0);
+    if (pageProcessed < processed) continue;
+    processed = pageProcessed;
+    accepted = Number(
+      parsed.accepted ?? parsed.valid ?? 0,
+    );
+    duplicates = Number(parsed.duplicates ?? 0);
+    const pageErrors = Array.isArray(parsed.errors)
+      ? (parsed.errors as { index: number; error: string }[])
+      : [];
+    rejected = Number(
+      parsed.rejected ?? pageErrors.length,
+    );
+    errors = pageErrors;
+  }
+  const totals = { processed, accepted, duplicates, rejected };
   return c.json({
     ...job,
     stages: counts.results,
     pipeline_status: pending ? "running" : failed ? "failed" : "complete",
     totals,
+    processed,
+    accepted,
+    duplicates,
+    rejected,
+    errors,
   });
 });
 app.post("/v1/jobs/:id/replay", scope("admin"), async (c) => {
@@ -529,13 +570,27 @@ app.get("/v1/assessments", scope("assessment:read"), async (c) => {
     .parse(c.req.query("limit") ?? 50);
   const repo = new Repository(c.env.DB);
   const tenant = c.get("principal").tenantId;
+  // Filters/sort/cursor always parsed so INVALID_CURSOR and Zod validation
+  // fire before branching. Default list is latest-per-observable; flat=1
+  // restores the raw multi-assessment listing.
   const filters = AssessmentFilters.parse(c.req.query());
-  const rows = await repo.assessments(
-    tenant,
-    limit + 1,
-    z.string().max(2000).optional().parse(c.req.query("cursor")),
-    filters,
-  );
+  const cursor = z.string().max(2000).optional().parse(c.req.query("cursor"));
+  const flat = c.req.query("flat") === "1";
+  const includeHistory = c.req.query("history") === "1";
+  if (!flat) {
+    const page = await latestAssessmentPerObservable(repo, tenant, {
+      limit,
+      includeHistory,
+      filters,
+      cursor,
+    });
+    return c.json({
+      data: page.data,
+      next_cursor: page.next_cursor,
+      ...(await repo.assessmentSummary(tenant)),
+    });
+  }
+  const rows = await repo.assessments(tenant, limit + 1, cursor, filters);
   const data = rows.slice(0, limit);
   return c.json({
     data,
@@ -607,10 +662,17 @@ app.post(
 );
 app.get("/v1/assessments/:id/stix", scope("assessment:read"), async (c) => {
   const p = c.get("principal");
+  // Publication audience: research (default, full history) or operational
+  // (governed by the central publication policy; non-eligible assessments are
+  // exported marked non-actionable rather than hidden).
+  const audience = z
+    .enum(["research", "operational"])
+    .default("research")
+    .parse(c.req.query("audience") ?? "research");
   const repo = new Repository(c.env.DB);
   const a = await repo.assessment(p.tenantId, c.req.param("id")!);
   if (!a) throw new AppError("NOT_FOUND", 404, "Assessment not found");
-  const bundle = exportStix(a);
+  const bundle = exportStix(a, { audience });
   await repo.audit(p, "export", a.assessment_id, c.get("requestId"));
   return c.json(bundle, 200, {
     "Content-Type": "application/stix+json",
@@ -682,8 +744,10 @@ for (const [route, type] of [
   });
 }
 app.get("/v1/entities", scope("intel:read"), async (c) => {
+  const repo = new Repository(c.env.DB);
   return c.json(
-    await new Repository(c.env.DB).browseEntities(
+    await browseCanonicalEntities(
+      repo,
       c.get("principal").tenantId,
       EntityFilters.parse(c.req.query()),
     ),
@@ -691,8 +755,9 @@ app.get("/v1/entities", scope("intel:read"), async (c) => {
 });
 app.get("/v1/search", scope("intel:read"), async (c) => {
   const q = z.string().trim().min(1).max(256).parse(c.req.query("q"));
+  const repo = new Repository(c.env.DB);
   return c.json(
-    await new Repository(c.env.DB).browseEntities(c.get("principal").tenantId, {
+    await browseCanonicalEntities(repo, c.get("principal").tenantId, {
       q,
       limit: 30,
     }),
@@ -766,28 +831,54 @@ app.delete("/v1/saved-views/:id", scope("assessment:read"), async (c) => {
 });
 app.get("/v1/entities/:id", scope("intel:read"), async (c) => {
   const repo = new Repository(c.env.DB);
+  const tenant = c.get("principal").tenantId;
   const id = c.req.param("id")!;
-  if (!(await repo.visible(c.get("principal").tenantId, id)))
-    throw new AppError("NOT_FOUND", 404, "Entity not found");
-  const entity = await repo.entity(id);
-  if (!entity) throw new AppError("NOT_FOUND", 404, "Entity not found");
-  const sources = await c.env.DB.prepare(
-    "SELECT provenance FROM entity_sources WHERE entity_id=?",
+  const view = await canonicalEntities(repo, tenant, id);
+  if (
+    !view ||
+    (!(await repo.visible(tenant, view.canonical_id)) &&
+      !(await repo.visible(tenant, id)))
   )
-    .bind(id)
-    .all<{ provenance: string }>();
-  const edges = await repo.edges(id, 30, c.get("principal").tenantId);
+    throw new AppError("NOT_FOUND", 404, "Entity not found");
+  const entity = view.entity;
+  const edges = await repo.edges(
+    view.canonical_id,
+    30,
+    tenant,
+  );
   const relationships = [];
   for (const edge of edges) {
     const other =
-      edge.sourceEntityId === id ? edge.targetEntityId : edge.sourceEntityId;
-    if (await repo.visible(c.get("principal").tenantId, other))
+      edge.sourceEntityId === view.canonical_id
+        ? edge.targetEntityId
+        : edge.sourceEntityId;
+    if (await repo.visible(tenant, other))
       relationships.push({ ...edge, entity: await repo.entity(other) });
+  }
+  const includeHistory = c.req.query("history") === "1";
+  let assessments:
+    | Awaited<ReturnType<typeof latestAssessmentPerObservable>>["data"]
+    | undefined;
+  if (entity.type === "observable") {
+    const page = await latestAssessmentPerObservable(repo, tenant, {
+      limit: 20,
+      includeHistory,
+    });
+    assessments = page.data.filter(
+      (s) => s.observable.id === view.canonical_id,
+    );
   }
   return c.json({
     entity,
-    sources: sources.results.map((row) => JSON.parse(row.provenance)),
+    canonical_id: view.canonical_id,
+    alias_ids: view.alias_ids,
+    sources: view.source_assertions,
+    source_assertions: view.source_assertions,
+    source_count: view.source_count,
+    mirror_count: view.mirror_count,
+    independent_corroboration_count: view.independent_corroboration_count,
     relationships,
+    ...(assessments ? { assessments } : {}),
     ...(entity.type === "threat-actor"
       ? {
           fingerprint: await (
@@ -868,8 +959,11 @@ app.get("/v1/graph/:id", scope("intel:read"), async (c) => {
   });
 });
 app.get("/v1/clusters", scope("intel:read"), async (c) => {
+  // Observation fields (first_seen/last_seen/first_observed/last_observed) hold
+  // evidence observedAt bounds and may be NULL when unknown; last_processed_at
+  // is our pipeline's wall-clock write time; rationale explains the grouping.
   const rows = await c.env.DB.prepare(
-    "SELECT * FROM threat_clusters WHERE observable_count>=2 ORDER BY last_seen DESC LIMIT 50",
+    "SELECT id,name,status,first_seen,last_seen,first_observed,last_observed,last_processed_at,grouping_key,rationale,confidence,observable_count,assessment_id FROM threat_clusters WHERE observable_count>=2 ORDER BY last_seen DESC LIMIT 50",
   ).all();
   return c.json({ data: rows.results });
 });
@@ -1040,7 +1134,8 @@ app.get("/v1/environment", scope("intel:read"), async (c) => {
   )
     .bind(c.get("principal").tenantId)
     .first<{ data: string }>();
-  return c.json(row ? JSON.parse(row.data) : EnvironmentSchema.parse({}));
+  // leaf-1.3.2: parse so assets defaults to [] for legacy rows
+  return c.json(EnvironmentSchema.parse(row ? JSON.parse(row.data) : {}));
 });
 app.put("/v1/environment", scope("admin"), async (c) => {
   const data = EnvironmentSchema.parse(await json(c));

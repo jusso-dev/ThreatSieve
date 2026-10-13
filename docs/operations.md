@@ -27,6 +27,14 @@ Scheduled GitHub workflows can be delayed and are not an uptime SLA. For contrac
 
 Outbox publishers atomically reserve at most 100 records before publishing queue batches. Reservations expire after five minutes. Acceptance followed by a publisher crash may redeliver a message; deterministic jobs and generation checks tolerate that at-least-once delivery. Consumers preflight bounded message batches against persisted job generations; completed, superseded and actively leased copies are acknowledged without repeated database writes. Duplicate deliveries acknowledge without consuming the active execution's retry budget. Maintenance recovers expired execution leases, up to six executions, then leaves the job failed for review.
 
+Migration `0021_outbox_dispatch_token.sql` indexes active publisher reservations. Without it, acknowledgement and reservation cleanup scan all historical outbox rows on each dispatch, including empty dispatches. Apply this additive index before diagnosing lag by increasing consumer concurrency. The regression suite checks the query plans as well as concurrent publication and failed-publication recovery.
+
+Normalization retains one message per invocation and ten records per processing step, with a concurrency ceiling of 32. Six consumers could not drain the scheduled ATT&CK snapshot within the 15-minute queue-age threshold. Monitor D1 errors and downstream queue age after changing capacity; reservation indexing must be in place first.
+
+Relationship-only feed records skip entity-existence lookups. Each relationship and its assertion history commit in one D1 batch, reducing database round trips and rolling back both writes together on failure.
+
+New outbox entries timestamp their own insertion, even when a continuation job retains its parent's original creation time. `OUTBOX_LAG` measures publication wait; `PIPELINE_LAG` continues to measure the full processing age.
+
 Late dead-letter messages cannot overwrite committed results or a newer replay generation. A completed parent may publish a downstream job only for its current generation. Source finalization atomically updates its checkpoint and counters once.
 
 For the specific legacy delivery defect, first take a D1 Time Travel bookmark, then inspect:

@@ -113,14 +113,33 @@ export default {
         ? await repo.assessments("demo-tenant", 100)
         : [];
       for (const a of assessments) await repo.saveAssessment(tenantId, a, []);
-      for (let i = 0; i < input.extraAssessments; i++) {
-        const a = assessments[0]!;
+      // Each extra row is its own observable. The assessments list is
+      // latest-per-observable, so cloning one observable never paginates.
+      const seed = assessments[0];
+      for (let i = 0; i < input.extraAssessments && seed; i++) {
+        const n = String(i).padStart(3, "0");
+        const value = `page-${n}.synthetic.test`;
+        const observable = {
+          ...seed.observable,
+          id: `${tenantId}-page-${n}`,
+          type: "domain" as const,
+          value,
+          normalizedValue: value,
+        };
+        const provenance = seed.evidence[0]?.provenance ?? {
+          sourceId: "synthetic-e2e",
+          sourceName: "Synthetic e2e",
+          retrievedAt: now,
+          redistributable: false,
+        };
+        await repo.putObservable(observable, provenance, tenantId);
         await repo.saveAssessment(
           tenantId,
           {
-            ...a,
-            assessment_id: `page-${String(i).padStart(3, "0")}`,
-            created_at: now,
+            ...seed,
+            assessment_id: `page-${n}`,
+            created_at: new Date(Date.parse(now) - i * 1000).toISOString(),
+            observable,
           },
           [],
         );

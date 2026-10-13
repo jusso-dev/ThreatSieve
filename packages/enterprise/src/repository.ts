@@ -293,16 +293,46 @@ export class OperationsRepository {
     const now = new Date().toISOString();
     const change = crypto.randomUUID();
     const objectId = id ?? crypto.randomUUID();
-    const object: WorkObject = {
+    const nextRevision = (previous?.revision ?? 0) + 1;
+    let object: WorkObject = {
       ...input,
       ownerId,
       id: objectId,
       tenantId: this.tenant,
-      revision: (previous?.revision ?? 0) + 1,
+      revision: nextRevision,
       createdAt: previous?.createdAt ?? now,
       updatedAt: now,
       createdBy: previous?.createdBy ?? this.principal.userId,
     };
+    if (object.kind === "report") {
+      const prior =
+        previous?.kind === "report" ? previous.publishedRevisions : [];
+      let publishedRevisions = prior.map((r) => ({ ...r }));
+      const publishing =
+        object.status === "published" &&
+        (previous?.kind !== "report" || previous.status !== "published");
+      if (publishing) {
+        publishedRevisions = [
+          ...publishedRevisions,
+          {
+            revision: nextRevision,
+            publishedAt: now,
+            reason,
+            title: object.title,
+            body: object.body,
+            claims: object.claims.map((c) => ({
+              text: c.text,
+              sourceRefs: [...c.sourceRefs],
+            })),
+            tlp: object.tlp,
+            audience: [...object.audience],
+            approvedBy: object.approvedBy,
+            approvedAt: object.approvedAt,
+          },
+        ];
+      }
+      object = { ...object, publishedRevisions };
+    }
     const gate = { id: objectId, change };
     const first = previous
       ? this.db

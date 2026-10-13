@@ -1,5 +1,11 @@
 import { createHash } from "node:crypto";
 import type { Assessment } from "../../schemas/src/index";
+import {
+  publicationState,
+  publishableClaims,
+  type PublicationAudience,
+  type PublicationState,
+} from "./policy";
 export type StixObject = Record<string, unknown> & { type: string; id: string };
 export interface StixBundle {
   type: "bundle";
@@ -55,8 +61,15 @@ export function indicatorPattern(a: Assessment): string | undefined {
 }
 export function exportStix(
   a: Assessment,
-  options: { includeRestricted: boolean } = { includeRestricted: false },
+  options: { includeRestricted?: boolean; audience: PublicationAudience },
 ): StixBundle {
+  const operational = options.audience === "operational";
+  // One publication authority: packages/stix/src/policy.ts decides what may be
+  // published; this function only renders the verdict.
+  const state: PublicationState = {
+    ...publicationState(a),
+    audience: options.audience,
+  };
   const now = a.updated_at ?? a.created_at;
   const classification =
     a.effective_classification ?? a.malicious.classification;
@@ -76,6 +89,20 @@ export function exportStix(
       (options.includeRestricted || e.provenance.redistributable === true),
   );
   const permittedIds = new Set(evidence.map((e) => e.id));
+  // Derived-data rights and revocation are decided by the policy in
+  // publishableClaims: operational exports publish a claim only when the
+  // policy permits it. Research exports keep today's full behavior.
+  const rights = operational ? publishableClaims(a) : null;
+  const claimClassification = !operational || (rights?.classification ?? false);
+  const claimRole = !operational || (rights?.role ?? false);
+  const indicatorType =
+    classification === "malicious" &&
+    claimClassification &&
+    (!operational || state.eligible)
+      ? "malicious-activity"
+      : classification === "benign"
+        ? "benign"
+        : "anomalous-activity";
   const base = {
     spec_version: "2.1",
     created: a.created_at,
@@ -86,6 +113,22 @@ export function exportStix(
     x_threatsieve_demo: a.demo,
   };
   const objects: StixObject[] = [];
+  // Export marking: every root object carries the publication state; only an
+  // operational export of an eligible assessment may claim operational use.
+  const marking = {
+    x_threatsieve_publication_state: state,
+    ...(operational
+      ? {
+          x_threatsieve_approved_for_operational_use:
+            state.eligible && !state.revoked,
+          revoked: state.revoked,
+        }
+      : {}),
+  };
+  const validity =
+    operational && state.valid_until ? { valid_until: state.valid_until } : {};
+  const keptAttack = new Set<string>();
+  const keptActors = new Set<string>();
   const expression = indicatorPattern(a);
   const rootType = expression
     ? "indicator"
@@ -109,16 +152,16 @@ export function exportStix(
       pattern_version: "2.1",
       pattern: expression,
       valid_from: now,
-      indicator_types: [
-        classification === "malicious"
-          ? "malicious-activity"
-          : classification === "benign"
-            ? "benign"
-            : "anomalous-activity",
-      ],
-      x_threatsieve_classification: decision,
-      x_threatsieve_model_classification: a.malicious,
+      indicator_types: [indicatorType],
+      ...(claimClassification
+        ? { x_threatsieve_classification: decision }
+        : {}),
+      // Model history is research material; operational exports carry only
+      // the publication verdict and retained claims.
+      ...(operational ? {} : { x_threatsieve_model_classification: a.malicious }),
       external_references,
+      ...marking,
+      ...validity,
     });
   else if (a.observable.type === "cve")
     objects.push({
@@ -130,6 +173,7 @@ export function exportStix(
         { source_name: "cve", external_id: a.observable.normalizedValue },
         ...external_references,
       ],
+      ...marking,
     });
   else {
     const type =
@@ -156,13 +200,17 @@ export function exportStix(
       last_observed: a.observable.lastSeen ?? now,
       number_observed: 1,
       object_refs: [scoId],
+      ...marking,
     });
   }
   for (const mapping of a.attack.filter(
     (m) => !a.effective_attack || a.effective_attack.includes(m.techniqueId),
   )) {
-    const ids = mapping.evidenceIds.filter((id) => permittedIds.has(id));
+    const ids = operational
+      ? (rights?.attack.get(mapping.techniqueId) ?? [])
+      : mapping.evidenceIds.filter((id) => permittedIds.has(id));
     if (!ids.length) continue;
+    keptAttack.add(mapping.techniqueId);
     const id = stixId("attack-pattern", mapping.techniqueId);
     objects.push({
       type: "attack-pattern",
@@ -187,10 +235,12 @@ export function exportStix(
     });
   }
   for (const malware of a.malware) {
-    const support = evidence.filter(
-      (e) => e.data.malwareEntityId === malware.id,
-    );
-    if (!support.length) continue;
+    const ids = operational
+      ? (rights?.malware.get(malware.id) ?? [])
+      : evidence
+          .filter((e) => e.data.malwareEntityId === malware.id)
+          .map((e) => e.id);
+    if (!ids.length) continue;
     const id = stixId("malware", malware.id);
     objects.push({
       type: "malware",
@@ -208,16 +258,36 @@ export function exportStix(
       target_ref: id,
       confidence: Math.round(malware.confidence * 100),
       x_threatsieve_assertion_type: "source_claimed",
-      x_threatsieve_evidence_ids: support.map((e) => e.id),
+      x_threatsieve_evidence_ids: ids,
     });
   }
+  const actorAssociations = a.actors
+    .filter(
+      (actor) =>
+        (!a.effective_actors || a.effective_actors.includes(actor.id)) &&
+        (operational
+          ? rights?.actors.has(actor.id) ?? false
+          : actor.evidenceIds.some((id) => permittedIds.has(id))),
+    )
+    .map((actor) => {
+      keptActors.add(actor.id);
+      return {
+        ...actor,
+        evidenceIds: operational
+          ? (rights?.actors.get(actor.id) ?? [])
+          : actor.evidenceIds.filter((id) => permittedIds.has(id)),
+      };
+    });
+  // Analyst selections may not resurrect claims the policy dropped.
+  const retained = (ids: string[] | undefined, kept: Set<string>) =>
+    operational ? (ids?.filter((id) => kept.has(id)) ?? undefined) : ids;
   objects.push({
     type: "note",
     id: stixId("note", a.assessment_id),
     ...base,
     abstract: "ThreatSieve evidence-backed assessment",
     content: JSON.stringify({
-      classification: decision,
+      ...(claimClassification ? { classification: decision } : {}),
       analyst_decision: options.includeRestricted
         ? a.analyst_decision
         : a.analyst_decision && {
@@ -226,23 +296,21 @@ export function exportStix(
             createdAt: a.analyst_decision.createdAt,
           },
       effective_classification: a.effective_classification,
-      role: effectiveRole,
-      analyst_attack_selections: a.effective_attack,
-      analyst_actor_selections: a.effective_actors,
-      review: a.human_review,
+      ...(claimRole ? { role: effectiveRole } : {}),
+      analyst_attack_selections: retained(
+        a.effective_attack,
+        keptAttack,
+      ),
+      analyst_actor_selections: retained(
+        a.effective_actors,
+        keptActors,
+      ),
       reason_codes: a.reason_codes,
       evidence,
-      model: a.models,
-      actor_associations: a.actors
-        .filter(
-          (actor) =>
-            (!a.effective_actors || a.effective_actors.includes(actor.id)) &&
-            actor.evidenceIds.some((id) => permittedIds.has(id)),
-        )
-        .map((actor) => ({
-          ...actor,
-          evidenceIds: actor.evidenceIds.filter((id) => permittedIds.has(id)),
-        })),
+      // Model history and the raw review flag are research material; the
+      // operational verdict is carried in x_threatsieve_publication_state.
+      ...(operational ? {} : { review: a.human_review, model: a.models }),
+      actor_associations: actorAssociations,
       notice:
         "Actor associations and model-inferred mappings are not confirmed attribution.",
     }),

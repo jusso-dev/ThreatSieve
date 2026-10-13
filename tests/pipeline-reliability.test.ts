@@ -76,6 +76,23 @@ it("operations jobs publish on their own queue", async () => {
   expect(published.map((job) => job.stage)).toEqual(["operations"]);
   expect(ingest.sendBatch).not.toHaveBeenCalled();
 });
+it("new continuation publications measure their own wait while retaining the original pipeline age", async () => {
+  const job = {
+    ...makeJob("normalise", "entity"),
+    createdAt: "2000-01-01T00:00:00.000Z",
+  };
+  const before = new Date().toISOString();
+  await repo.enqueue(job);
+  const row = await db
+    .prepare(
+      "SELECT p.created_at AS pipeline_created,o.created_at AS publication_created FROM pipeline_jobs p JOIN outbox o ON o.id=p.id WHERE p.id=?",
+    )
+    .bind(job.jobId)
+    .first<{ pipeline_created: string; publication_created: string }>();
+  expect(row?.pipeline_created).toBe(job.createdAt);
+  expect(row!.publication_created >= before).toBe(true);
+  expect(row!.publication_created <= new Date().toISOString()).toBe(true);
+});
 it("concurrent dispatchers reserve each outbox item once", async () => {
   for (let i = 0; i < 25; i++)
     await repo.enqueue(makeJob("enrich", "entity-" + i));
@@ -83,6 +100,25 @@ it("concurrent dispatchers reserve each outbox item once", async () => {
   expect(sent).toHaveLength(25);
   expect(new Set(sent.map((j) => j.jobId)).size).toBe(25);
   expect(await dispatchOutbox(env)).toBe(0);
+});
+it("reservation acknowledgement and cleanup use an index instead of scanning historical deliveries", async () => {
+  for (const sql of [
+    "UPDATE outbox SET dispatched_at=?,lease_until=NULL,dispatch_token=NULL WHERE dispatch_token=? AND queue=?",
+    "UPDATE outbox SET lease_until=NULL,dispatch_token=NULL WHERE dispatch_token=?",
+  ]) {
+    const plan = await db
+      .prepare("EXPLAIN QUERY PLAN " + sql)
+      .bind(...Array.from(sql.matchAll(/\?/g), () => "test-reservation"))
+      .all<{ detail: string }>();
+    expect(
+      plan.results.some((row) =>
+        /SEARCH outbox USING INDEX outbox_dispatch_token/.test(row.detail),
+      ),
+    ).toBe(true);
+    expect(plan.results.some((row) => /SCAN outbox/.test(row.detail))).toBe(
+      false,
+    );
+  }
 });
 it("late dead letters cannot overwrite completed results", async () => {
   const job = makeJob("enrich", "entity");

@@ -22,12 +22,71 @@ import {
   type WorkKind,
   type WorkObject,
   type IntelligenceEvent,
+  type MatchCriteria,
 } from "../../../packages/schemas/src/enterprise";
+import { EntityType } from "../../../packages/schemas/src/index";
 import { PageHeader, DataState } from "./shell";
 import { Button } from "./ui/button";
 import { Modal } from "./ui/modal";
 import { QueryField, FilterSelect } from "./filter-controls";
 import { ReferencePicker, ReferenceList } from "./workspace-references";
+
+const CRITERION_LABELS: Record<string, string> = {
+  sourceIds: "Sources",
+  entityTypes: "Entity types",
+  keywords: "Keywords",
+  technologies: "Technologies",
+  industries: "Industries",
+  countries: "Countries",
+  actors: "Threat actors",
+  techniques: "ATT&CK techniques",
+  tags: "Tags",
+  minConfidence: "Minimum confidence",
+  from: "Observed between",
+  to: "Observed between",
+};
+function criterionLabel(key: string) {
+  return CRITERION_LABELS[key] ?? "Unknown field";
+}
+function criteriaPreview(criteria: Record<string, unknown>) {
+  const parts: string[] = [];
+  const push = (key: string, words: string) => {
+    if (words) parts.push(criterionLabel(key).toLowerCase() + " " + words);
+  };
+  for (const key of [
+    "entityTypes",
+    "keywords",
+    "technologies",
+    "industries",
+    "countries",
+    "actors",
+    "techniques",
+    "tags",
+    "sourceIds",
+  ]) {
+    const value = criteria[key];
+    if (Array.isArray(value) && value.length)
+      push(key, value.map(String).join(", "));
+  }
+  if (typeof criteria.minConfidence === "number" && criteria.minConfidence > 0)
+    push(
+      "minConfidence",
+      "of at least " + Math.round(criteria.minConfidence * 100) + "%",
+    );
+  if (typeof criteria.from === "string" || typeof criteria.to === "string") {
+    const from =
+      typeof criteria.from === "string" ? String(criteria.from).slice(0, 10) : "…";
+    const to =
+      typeof criteria.to === "string" ? String(criteria.to).slice(0, 10) : "…";
+    parts.push("observed between " + from + " and " + to);
+  }
+  if (!parts.length) return "Match objects that meet no criteria yet. All criteria must match.";
+  return (
+    "Match objects that " +
+    parts.join(" AND ") +
+    ". All criteria must match."
+  );
+}
 export interface RequirementMetrics {
   coverage: number | null;
   coverageLabel: string;
@@ -352,7 +411,8 @@ export function WorkspaceDetail({ kind, id }: { kind: WorkKind; id: string }) {
               <div className="criteria-grid">
                 {data.metrics?.criteria.map((c) => (
                   <span key={c.name}>
-                    {c.satisfied ? "Supported" : "Gap"} · {c.name}
+                    {c.satisfied ? "Supported" : "Gap"} ·{" "}
+                    {criterionLabel(c.name)}
                   </span>
                 ))}
               </div>
@@ -472,9 +532,48 @@ export function WorkspaceDetail({ kind, id }: { kind: WorkKind; id: string }) {
           {o.kind === "report" && (
             <section className="work-section report-content">
               <h2>{o.reportType.replaceAll("-", " ")}</h2>
+              <p className="muted">
+                TLP:{o.tlp.toUpperCase()}
+                {o.audience.length
+                  ? " · Audience: " + o.audience.join(", ")
+                  : ""}
+                {o.approvedBy
+                  ? " · Approved by " +
+                    o.approvedBy +
+                    (o.approvedAt ? " at " + o.approvedAt : "")
+                  : ""}
+              </p>
               <div className="preserve-lines">
                 {o.body || "This report has no authored content yet."}
               </div>
+              {o.claims.length > 0 && (
+                <ul>
+                  {o.claims.map((claim, i) => (
+                    <li key={i}>
+                      {claim.text}
+                      {claim.sourceRefs.length > 0 && (
+                        <small>
+                          {" "}
+                          · Citations: {claim.sourceRefs.join(", ")}
+                        </small>
+                      )}
+                    </li>
+                  ))}
+                </ul>
+              )}
+              {o.publishedRevisions.length > 0 && (
+                <>
+                  <h3>Published revisions</h3>
+                  <ul>
+                    {o.publishedRevisions.map((rev) => (
+                      <li key={rev.revision + rev.publishedAt}>
+                        Revision {rev.revision} · {rev.publishedAt}
+                        {rev.reason ? " · " + rev.reason : ""}
+                      </li>
+                    ))}
+                  </ul>
+                </>
+              )}
               <p className="muted">
                 Analyst-authored text. Citations are listed below; references do
                 not establish that every statement has been verified.
@@ -484,15 +583,43 @@ export function WorkspaceDetail({ kind, id }: { kind: WorkKind; id: string }) {
           {"criteria" in o && o.kind !== "requirement" && (
             <section className="work-section">
               <h2>Collection criteria</h2>
+              <p className="muted">
+                {criteriaPreview(o.criteria as Record<string, unknown>)}
+              </p>
               <dl className="criteria-grid">
                 {Object.entries(o.criteria)
-                  .filter(([, v]) => Array.isArray(v) && v.length)
+                  .filter(
+                    ([k, v]) =>
+                      k !== "to" &&
+                      ((Array.isArray(v) && v.length) ||
+                        (typeof v === "number" && v > 0) ||
+                        (typeof v === "string" && v)),
+                  )
                   .map(([k, v]) => (
                     <div key={k}>
-                      <dt>{k}</dt>
-                      <dd>{Array.isArray(v) ? v.join(", ") : String(v)}</dd>
+                      <dt>{criterionLabel(k)}</dt>
+                      <dd>
+                        {k === "from"
+                          ? String(v).slice(0, 10) +
+                            " → " +
+                            (typeof o.criteria.to === "string"
+                              ? String(o.criteria.to).slice(0, 10)
+                              : "…")
+                          : Array.isArray(v)
+                            ? v.join(", ")
+                            : typeof v === "number"
+                              ? Math.round(v * 100) + "%"
+                              : String(v)}
+                      </dd>
                     </div>
                   ))}
+                {typeof o.criteria.to === "string" &&
+                  typeof o.criteria.from !== "string" && (
+                    <div key="to">
+                      <dt>{criterionLabel("to")}</dt>
+                      <dd>… → {String(o.criteria.to).slice(0, 10)}</dd>
+                    </div>
+                  )}
               </dl>
               {o.kind === "watchlist" && (
                 <p>
@@ -877,6 +1004,140 @@ export function WorkEditor({
               </select>
             </label>
             {textField("body", "Report content", 12)}
+            <label>
+              TLP
+              <select
+                value={str("tlp") || "clear"}
+                onChange={(e) => set("tlp", e.target.value)}
+              >
+                {["clear", "green", "amber", "amber+strict", "red"].map((t) => (
+                  <option key={t} value={t}>
+                    TLP:{t.toUpperCase()}
+                  </option>
+                ))}
+              </select>
+            </label>
+            {listField("audience", "Audience")}
+            <label>
+              Approved by
+              <input
+                value={str("approvedBy")}
+                onChange={(e) =>
+                  set("approvedBy", e.target.value || undefined)
+                }
+                maxLength={200}
+              />
+            </label>
+            <label>
+              Approved at
+              <input
+                type="datetime-local"
+                value={
+                  str("approvedAt")
+                    ? str("approvedAt").slice(0, 16)
+                    : ""
+                }
+                onChange={(e) =>
+                  set(
+                    "approvedAt",
+                    e.target.value
+                      ? new Date(e.target.value).toISOString()
+                      : undefined,
+                  )
+                }
+              />
+            </label>
+            <fieldset>
+              <legend>Claims</legend>
+              {(Array.isArray(draft.claims)
+                ? (draft.claims as {
+                    text: string;
+                    sourceRefs: string[];
+                  }[])
+                : []
+              ).map((claim, i) => (
+                <div key={i} className="form-columns">
+                  <label>
+                    Claim text
+                    <input
+                      value={claim.text}
+                      onChange={(e) => {
+                        const claims = [
+                          ...(Array.isArray(draft.claims)
+                            ? (draft.claims as {
+                                text: string;
+                                sourceRefs: string[];
+                              }[])
+                            : []),
+                        ];
+                        claims[i] = { ...claim, text: e.target.value };
+                        set("claims", claims);
+                      }}
+                    />
+                  </label>
+                  <label>
+                    Source citations
+                    <input
+                      value={claim.sourceRefs.join(", ")}
+                      onChange={(e) => {
+                        const claims = [
+                          ...(Array.isArray(draft.claims)
+                            ? (draft.claims as {
+                                text: string;
+                                sourceRefs: string[];
+                              }[])
+                            : []),
+                        ];
+                        claims[i] = {
+                          ...claim,
+                          sourceRefs: splitValues(e.target.value),
+                        };
+                        set("claims", claims);
+                      }}
+                    />
+                    <small>Comma-separated source references</small>
+                  </label>
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size="sm"
+                    onClick={() =>
+                      set(
+                        "claims",
+                        (
+                          Array.isArray(draft.claims)
+                            ? (draft.claims as {
+                                text: string;
+                                sourceRefs: string[];
+                              }[])
+                            : []
+                        ).filter((_, j) => j !== i),
+                      )
+                    }
+                  >
+                    Remove claim
+                  </Button>
+                </div>
+              ))}
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                onClick={() =>
+                  set("claims", [
+                    ...(Array.isArray(draft.claims)
+                      ? (draft.claims as {
+                          text: string;
+                          sourceRefs: string[];
+                        }[])
+                      : []),
+                    { text: "New claim", sourceRefs: [] },
+                  ])
+                }
+              >
+                Add claim
+              </Button>
+            </fieldset>
           </>
         )}
         {listField("tags", "Tags")}
@@ -954,7 +1215,12 @@ export function WorkEditor({
             <summary>Collection criteria</summary>
             <p className="muted">
               Structured criteria identify candidate support. They do not assert
-              attribution.
+              attribution. All criteria must match.
+            </p>
+            <p className="criteria-preview" role="status">
+              {criteriaPreview(
+                (draft.criteria ?? {}) as Record<string, unknown>,
+              )}
             </p>
             <div className="form-columns">
               {[
@@ -964,9 +1230,7 @@ export function WorkEditor({
                 "countries",
                 "actors",
                 "techniques",
-                "sourceIds",
                 "tags",
-                "entityTypes",
               ].map((key) => {
                 const criteria = (draft.criteria ?? {}) as Record<
                   string,
@@ -974,7 +1238,7 @@ export function WorkEditor({
                 >;
                 return (
                   <label key={key}>
-                    {key}
+                    {criterionLabel(key)}
                     <input
                       value={
                         Array.isArray(criteria[key])
@@ -990,6 +1254,34 @@ export function WorkEditor({
                   </label>
                 );
               })}
+              <label>
+                {criterionLabel("minConfidence")}
+                <input
+                  type="number"
+                  min={0}
+                  max={1}
+                  step={0.05}
+                  value={
+                    typeof (draft.criteria as MatchCriteria | undefined)
+                      ?.minConfidence === "number"
+                      ? String(
+                          (draft.criteria as MatchCriteria).minConfidence,
+                        )
+                      : "0"
+                  }
+                  onChange={(e) => {
+                    const criteria = (draft.criteria ?? {}) as Record<
+                      string,
+                      unknown
+                    >;
+                    const n = Number(e.target.value);
+                    set("criteria", {
+                      ...criteria,
+                      minConfidence: Number.isFinite(n) ? n : 0,
+                    });
+                  }}
+                />
+              </label>
               {["from", "to"].map((key) => {
                 const criteria = (draft.criteria ?? {}) as Record<
                   string,
@@ -997,7 +1289,10 @@ export function WorkEditor({
                 >;
                 return (
                   <label key={key}>
-                    {key === "from" ? "From date" : "To date"}
+                    {criterionLabel(key)}
+                    {" ("}
+                    {key === "from" ? "start" : "end"}
+                    {")"}
                     <input
                       type="date"
                       value={
@@ -1023,6 +1318,40 @@ export function WorkEditor({
                 );
               })}
             </div>
+            <CriterionSourcePicker
+              selected={
+                Array.isArray(
+                  (draft.criteria as Record<string, unknown> | undefined)
+                    ?.sourceIds,
+                )
+                  ? ((draft.criteria as Record<string, unknown>)
+                      .sourceIds as string[])
+                  : []
+              }
+              onChange={(sourceIds) =>
+                set("criteria", {
+                  ...((draft.criteria ?? {}) as Record<string, unknown>),
+                  sourceIds,
+                })
+              }
+            />
+            <CriterionEntityPicker
+              selected={
+                Array.isArray(
+                  (draft.criteria as Record<string, unknown> | undefined)
+                    ?.entityTypes,
+                )
+                  ? ((draft.criteria as Record<string, unknown>)
+                      .entityTypes as string[])
+                  : []
+              }
+              onChange={(entityTypes) =>
+                set("criteria", {
+                  ...((draft.criteria ?? {}) as Record<string, unknown>),
+                  entityTypes,
+                })
+              }
+            />
           </details>
         )}
         {kind === "requirement" && (
@@ -1126,5 +1455,154 @@ export function WorkEditor({
         </div>
       </form>
     </Modal>
+  );
+}
+
+function CriterionSourcePicker({
+  selected,
+  onChange,
+}: {
+  selected: string[];
+  onChange: (ids: string[]) => void;
+}) {
+  const [q, setQ] = useState("");
+  const feeds = useApi<{ data: { id: string; name: string }[] }>("v1/feeds");
+  const filtered =
+    feeds.data?.data.filter((s) => {
+      const hay = (s.name + " " + s.id).toLowerCase();
+      return !q || hay.includes(q.toLowerCase());
+    }) ?? [];
+  return (
+    <div className="criterion-picker">
+      <strong>{criterionLabel("sourceIds")}</strong>
+      <p className="muted">Searchable source picker. Selected sources drive matching.</p>
+      <QueryField label="Search sources" value={q} onChange={setQ} />
+      <DataState loading={feeds.loading} error={feeds.error} />
+      <div className="reference-results">
+        {filtered.map((s) => {
+          const checked = selected.includes(s.id);
+          return (
+            <button
+              type="button"
+              key={s.id}
+              aria-pressed={checked}
+              onClick={() =>
+                onChange(
+                  checked
+                    ? selected.filter((id) => id !== s.id)
+                    : [...selected, s.id],
+                )
+              }
+            >
+              <strong>
+                {checked ? "✓ " : ""}
+                {s.name || s.id}
+              </strong>
+              <small>{s.id}</small>
+            </button>
+          );
+        })}
+      </div>
+      {selected.length > 0 && (
+        <p className="muted">Selected: {selected.join(", ")}</p>
+      )}
+    </div>
+  );
+}
+
+function CriterionEntityPicker({
+  selected,
+  onChange,
+}: {
+  selected: string[];
+  onChange: (types: string[]) => void;
+}) {
+  const [q, setQ] = useState("");
+  const [hits, setHits] = useState<
+    { id: string; name: string; type: string }[]
+  >([]);
+  useEffect(() => {
+    const query = q.trim();
+    if (query.length < 2) {
+      setHits([]);
+      return;
+    }
+    const controller = new AbortController();
+    const timer = setTimeout(() => {
+      void api<{ data: { id: string; name: string; type: string }[] }>(
+        "v1/search?q=" + encodeURIComponent(query),
+        { signal: controller.signal },
+      )
+        .then((r) => {
+          if (!controller.signal.aborted) setHits(r.data);
+        })
+        .catch(() => {
+          if (!controller.signal.aborted) setHits([]);
+        });
+    }, 250);
+    return () => {
+      controller.abort();
+      clearTimeout(timer);
+    };
+  }, [q]);
+  const types = EntityType.options.filter(
+    (t) => !q || t.toLowerCase().includes(q.toLowerCase()),
+  );
+  const toggle = (type: string) =>
+    onChange(
+      selected.includes(type)
+        ? selected.filter((t) => t !== type)
+        : [...selected, type],
+    );
+  return (
+    <div className="criterion-picker">
+      <strong>{criterionLabel("entityTypes")}</strong>
+      <p className="muted">
+        Searchable entity picker. Choose types directly or from entity search;
+        selected types drive matching.
+      </p>
+      <QueryField label="Search entities or types" value={q} onChange={setQ} />
+      <div className="reference-results">
+        {types.map((t) => {
+          const checked = selected.includes(t);
+          return (
+            <button
+              type="button"
+              key={t}
+              aria-pressed={checked}
+              onClick={() => toggle(t)}
+            >
+              <strong>
+                {checked ? "✓ " : ""}
+                {t}
+              </strong>
+              <small>entity type</small>
+            </button>
+          );
+        })}
+        {hits.map((e) => {
+          const checked = selected.includes(e.type);
+          return (
+            <button
+              type="button"
+              key={e.id}
+              aria-pressed={checked}
+              onClick={() => toggle(e.type)}
+            >
+              <strong>
+                {checked ? "✓ " : ""}
+                {e.name}
+              </strong>
+              <small>
+                {e.type} · {e.id}
+              </small>
+            </button>
+          );
+        })}
+      </div>
+      {selected.length > 0 && (
+        <p className="muted">Selected types: {selected.join(", ")}</p>
+      )}
+    </div>
   );
 }

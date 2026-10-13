@@ -183,7 +183,9 @@ export async function exportWorkspace(
   for (const ref of references) {
     if (ref.type === "assessment") {
       const a = await repo.intel.assessment(repo.tenant, ref.id);
-      if (a) for (const obj of exportStix(a).objects) objects.set(obj.id, obj);
+      if (a)
+        for (const obj of exportStix(a, { audience: "research" }).objects)
+          objects.set(obj.id, obj);
     } else if (ref.type === "entity") {
       if (!(await repo.intel.visible(repo.tenant, ref.id))) continue;
       const e = await repo.intel.entity(ref.id);
@@ -255,20 +257,59 @@ export function reportHtml(o: WorkObject) {
         : o.kind === "investigation"
           ? o.hypothesis
           : o.description;
+  const tlp = o.kind === "report" ? o.tlp : undefined;
+  const audience = o.kind === "report" ? o.audience : [];
+  const approvedBy = o.kind === "report" ? o.approvedBy : undefined;
+  const approvedAt = o.kind === "report" ? o.approvedAt : undefined;
+  const claims = o.kind === "report" ? o.claims : [];
+  const markings = [
+    tlp ? "TLP:" + tlp.toUpperCase() : null,
+    audience.length ? "Audience: " + audience.join(", ") : null,
+    approvedBy
+      ? "Approved by " +
+        approvedBy +
+        (approvedAt ? " at " + approvedAt : "")
+      : null,
+  ]
+    .filter(Boolean)
+    .map((line) => "<p>" + escapeHtml(line as string) + "</p>")
+    .join("");
+  const claimsHtml = claims.length
+    ? "<h2>Claims</h2><ul>" +
+      claims
+        .map((claim) => {
+          const citations = claim.sourceRefs.length
+            ? " <cite>" +
+              claim.sourceRefs
+                .map((ref) => escapeHtml(ref))
+                .join(", ") +
+              "</cite>"
+            : "";
+          return (
+            "<li>" + escapeHtml(claim.text) + citations + "</li>"
+          );
+        })
+        .join("") +
+      "</ul>"
+    : "";
   return (
     '<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width"><title>' +
     escapeHtml(o.title) +
-    " · ThreatSieve</title><style>body{font:14px/1.7 system-ui,sans-serif;max-width:900px;margin:40px auto;padding:24px;color:#1b242c}h1{font-size:24px}h2{font-size:16px}header{border-bottom:1px solid #ccc;padding-bottom:16px}article{white-space:pre-wrap}li{overflow-wrap:anywhere}small{color:#52606d}@media print{body{margin:0;max-width:none}}</style></head><body><header><small>THREATSIEVE · WORKSPACE PRIVATE · REVISION " +
+    " · ThreatSieve</title><style>body{font:14px/1.7 system-ui,sans-serif;max-width:900px;margin:40px auto;padding:24px;color:#1b242c}h1{font-size:24px}h2{font-size:16px}header{border-bottom:1px solid #ccc;padding-bottom:16px}article{white-space:pre-wrap}li{overflow-wrap:anywhere}cite{color:#52606d;font-style:normal;font-size:12px}small{color:#52606d}@media print{body{margin:0;max-width:none}}</style></head><body><header><small>THREATSIEVE · WORKSPACE PRIVATE · REVISION " +
     o.revision +
     "</small><h1>" +
     escapeHtml(o.title) +
     "</h1><p>" +
     escapeHtml(o.kind + " · " + o.status + " · " + o.priority + " priority") +
-    "</p><small>" +
+    "</p>" +
+    markings +
+    "<small>" +
     escapeHtml(o.updatedAt) +
     "</small></header><h2>Analyst-authored intelligence</h2><article>" +
     escapeHtml(body) +
-    "</article><h2>References</h2><ul>" +
+    "</article>" +
+    claimsHtml +
+    "<h2>References</h2><ul>" +
     o.references
       .map(
         (r) =>

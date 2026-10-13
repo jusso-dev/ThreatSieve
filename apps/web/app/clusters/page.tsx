@@ -9,8 +9,13 @@ interface Cluster {
   id: string;
   name: string;
   status: string;
-  first_seen: string;
-  last_seen: string;
+  first_seen: string | null;
+  last_seen: string | null;
+  first_observed: string | null;
+  last_observed: string | null;
+  last_processed_at: string | null;
+  grouping_key: string | null;
+  rationale: string | null;
   confidence: number;
   observable_count: number;
 }
@@ -49,12 +54,33 @@ export default function Clusters() {
             </div>
             <div className="detail-row">
               <span>Last observed</span>
-              <strong>{relativeTime(c.last_seen)}</strong>
+              <strong>
+                {(c.last_observed ?? c.last_seen)
+                  ? relativeTime(c.last_observed ?? c.last_seen!)
+                  : "Unknown"}
+              </strong>
             </div>
             <div className="detail-row">
-              <span>Correlation confidence</span>
+              <span>Last processed</span>
+              <strong>
+                {c.last_processed_at
+                  ? relativeTime(c.last_processed_at)
+                  : "Unknown"}
+              </strong>
+            </div>
+            <div className="detail-row">
+              <span>Correlation confidence (evidence-weighted)</span>
               <strong>{percent(c.confidence)}</strong>
             </div>
+            <p className="tooltip-note">
+              Grouping: {c.rationale ?? "Rationale unknown"}
+            </p>
+            {c.grouping_key?.startsWith("malware:") && (
+              <p className="tooltip-note">
+                Shared malware association: the members link to the same malware
+                family. This is not evidence of coordinated activity.
+              </p>
+            )}
             <Button
               variant="outline"
               size="sm"
@@ -90,8 +116,36 @@ export default function Clusters() {
         <section className="panel" style={{ marginTop: 25 }}>
           <h2>{selected.name}</h2>
           <p className="panel-subtitle">
-            First observed {new Date(selected.first_seen).toLocaleDateString()}{" "}
+            First observed{" "}
+            {(selected.first_observed ?? selected.first_seen)
+              ? new Date(
+                  selected.first_observed ?? selected.first_seen!,
+                ).toLocaleDateString()
+              : "Unknown"}{" "}
             · Source-backed membership
+          </p>
+          <div className="detail-row">
+            <span>Last observed</span>
+            <strong>
+              {(selected.last_observed ?? selected.last_seen)
+                ? relativeTime(selected.last_observed ?? selected.last_seen!)
+                : "Unknown"}
+            </strong>
+          </div>
+          <div className="detail-row">
+            <span>Last processed</span>
+            <strong>
+              {selected.last_processed_at
+                ? relativeTime(selected.last_processed_at)
+                : "Unknown"}
+            </strong>
+          </div>
+          <div className="detail-row">
+            <span>Correlation confidence (evidence-weighted)</span>
+            <strong>{percent(selected.confidence)}</strong>
+          </div>
+          <p className="tooltip-note">
+            Grouping: {selected.rationale ?? "Rationale unknown"}
           </p>
           <div className="cluster-members">
             {selected.members.map((m) => (
@@ -103,6 +157,10 @@ export default function Clusters() {
           <p className="tooltip-note">
             No customer identities or private telemetry are exposed in this
             view.
+          </p>
+          <p className="tooltip-note">
+            Clusters are evidence-linked associations, not confirmed campaigns
+            or actor attribution.
           </p>
         </section>
       )}

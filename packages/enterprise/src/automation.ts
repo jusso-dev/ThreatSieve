@@ -1,7 +1,13 @@
 import { publishCollection } from "./taxii";
 import { Repository } from "../../database/src/repository";
 import { OperationsRepository } from "./repository";
-import { criterionMatches, dossier, cachedCoverage } from "./intelligence";
+import {
+  criterionMatches,
+  dossier,
+  cachedCoverage,
+  workspaceMatchStatement,
+  workspaceMatchMarkStatus,
+} from "./intelligence";
 import {
   WorkObjectSchema,
   WorkInput,
@@ -355,47 +361,76 @@ export async function processOperation(db: D1Database, job: PipelineJob) {
       await intel.finish(job, { skipped: "derived event" });
       return;
     }
-    const matched = await matchObject(repo, object, event);
+    const now = new Date().toISOString();
+    const old = await db
+      .prepare(
+        "SELECT score,event_id,match_status FROM workspace_matches WHERE tenant_id=? AND object_id=? AND entity_id=?",
+      )
+      .bind(repo.tenant, object.id, event.entity_id)
+      .first<{
+        score: number | null;
+        event_id: string;
+        match_status: string;
+      }>();
+    // Prior complete/failed rows only — a running placeholder is not a prior match.
+    const prior =
+      old && old.match_status !== "running" && old.match_status !== "queued"
+        ? old
+        : null;
+    await workspaceMatchMarkStatus(db, {
+      tenantId: repo.tenant,
+      objectId: object.id,
+      entityId: event.entity_id,
+      eventId: event.id,
+      matchStatus: "running",
+      lastEvaluatedAt: now,
+    }).run();
+    let matched;
+    try {
+      matched = await matchObject(repo, object, event);
+    } catch (error) {
+      await workspaceMatchMarkStatus(db, {
+        tenantId: repo.tenant,
+        objectId: object.id,
+        entityId: event.entity_id,
+        eventId: event.id,
+        matchStatus: "failed",
+        lastEvaluatedAt: new Date().toISOString(),
+      }).run();
+      throw error;
+    }
     if (matched) {
-      const old = await db
-        .prepare(
-          "SELECT score,event_id FROM workspace_matches WHERE tenant_id=? AND object_id=? AND entity_id=?",
-        )
-        .bind(repo.tenant, object.id, event.entity_id)
-        .first<{ score: number | null; event_id: string }>();
-      const now = new Date().toISOString();
       const id = "match:" + object.id + ":" + event.id;
       const statements = [
-        db
-          .prepare(
-            "INSERT INTO workspace_matches VALUES(?,?,?,?,?,?,?,?) ON CONFLICT(tenant_id,object_id,entity_id) DO UPDATE SET evidence_ids=excluded.evidence_ids,criteria=excluded.criteria,event_id=excluded.event_id,matched_at=excluded.matched_at,score=excluded.score",
-          )
-          .bind(
-            repo.tenant,
-            object.id,
-            event.entity_id,
-            JSON.stringify(matched.evidenceIds),
-            JSON.stringify(matched.dimensions),
-            event.id,
-            now,
-            matched.dossier.scores.threat.value,
-          ),
+        workspaceMatchStatement(db, {
+          tenantId: repo.tenant,
+          objectId: object.id,
+          entityId: event.entity_id,
+          evidenceIds: matched.evidenceIds,
+          criteria: matched.dimensions,
+          eventId: event.id,
+          matchedAt: now,
+          score: matched.dossier.scores.threat.value,
+          matchStatus: "complete",
+          lastEvaluatedAt: now,
+          onConflict: "update",
+        }),
       ];
       // Minimum meaningful score movement is 15 policy points, not a model probability.
       const significant =
         event.event_type !== "score.changed" ||
-        old?.score === null ||
-        old === null ||
+        prior?.score === null ||
+        prior === null ||
         Math.abs(
-          (old.score ?? 0) - (matched.dossier.scores.threat.value ?? 0),
+          (prior.score ?? 0) - (matched.dossier.scores.threat.value ?? 0),
         ) >= 15;
       const notify =
         object.kind === "watchlist"
           ? object.triggers.includes(
               event.event_type as (typeof object.triggers)[number],
             ) && significant
-          : object.kind === "requirement" && !old;
-      if (notify && old?.event_id !== event.id) {
+          : object.kind === "requirement" && !prior;
+      if (notify && prior?.event_id !== event.id) {
         statements.push(
           notification(
             db,
@@ -656,20 +691,19 @@ async function executePlaybook(
       );
       const intelligence = await dossier(repo, event.entity_id);
       statements.push(
-        repo.db
-          .prepare(
-            "INSERT INTO workspace_matches VALUES(?,?,?,?,?,?,?,?) ON CONFLICT(tenant_id,object_id,entity_id) DO NOTHING",
-          )
-          .bind(
-            repo.tenant,
-            target.id,
-            event.entity_id,
-            JSON.stringify(intelligence.evidence.map((e) => e.id)),
-            JSON.stringify(["playbook_membership"]),
-            event.id,
-            now,
-            intelligence.scores.threat.value,
-          ),
+        workspaceMatchStatement(repo.db, {
+          tenantId: repo.tenant,
+          objectId: target.id,
+          entityId: event.entity_id,
+          evidenceIds: intelligence.evidence.map((e) => e.id),
+          criteria: ["playbook_membership"],
+          eventId: event.id,
+          matchedAt: now,
+          score: intelligence.scores.threat.value,
+          matchStatus: "complete",
+          lastEvaluatedAt: now,
+          onConflict: "ignore",
+        }),
       );
       statements.push(
         notification(

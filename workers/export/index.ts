@@ -28,9 +28,16 @@ export async function exportAssessment(
   const id = await digest(tenantId + ":" + assessmentId + ":" + revision);
   const key =
     "exports/" + tenantId + "/" + assessmentId + "/" + revision + ".json";
-  await env.ARCHIVE.put(key, JSON.stringify(exportStix(a)), {
-    httpMetadata: { contentType: "application/stix+json" },
-  });
+  await env.ARCHIVE.put(
+    key,
+    // Research archive material; whether the assessment is eligible for
+    // operational publication is decided inside exportStix via the central
+    // policy in packages/stix/src/policy.ts.
+    JSON.stringify(exportStix(a, { audience: "research" })),
+    {
+      httpMetadata: { contentType: "application/stix+json" },
+    },
+  );
   // If feedback raced with serialization, retry against the current decision instead of publishing stale intelligence.
   const result = await env.DB.prepare(
     "INSERT OR IGNORE INTO assessment_exports(id,tenant_id,assessment_id,revision,r2_key,created_at) SELECT ?,?,?,?,?,? WHERE EXISTS(SELECT 1 FROM assessments WHERE tenant_id=? AND id=? AND revision=?)",

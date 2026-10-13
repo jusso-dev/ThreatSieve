@@ -436,6 +436,7 @@ main {
   width: 100%;
   max-width: 1800px;
   margin: auto;
+  min-width: 0;
 }
 .page-heading {
   display: flex;
@@ -2020,12 +2021,14 @@ h1 {
 }
 .page-heading h1 {
   letter-spacing: -1px;
+  overflow-wrap: anywhere;
 }
 .page-heading p {
   font-size: 14px;
   line-height: 1.65;
   max-width: 72ch;
   color: var(--muted);
+  overflow-wrap: anywhere;
 }
 .button {
   font-size: 13px;

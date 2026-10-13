@@ -12,6 +12,9 @@ import {
 } from "../packages/intel/src/feeds";
 import { ingestRecord } from "../packages/intel/src/ingest";
 import { normalise } from "../packages/intel/src/normalise";
+import { getFeed } from "../workers/feed-sync/index";
+import type { AppEnv } from "../apps/api/src/env";
+import type { IntelEntity } from "../packages/schemas/src/index";
 let mf: Miniflare;
 let repo: Repository;
 beforeAll(async () => {
@@ -32,6 +35,128 @@ beforeAll(async () => {
 afterAll(async () => {
   await mf?.dispose();
 });
+it.each([
+  ["vulnerability", "CVE-2026-99998"],
+  ["attack-technique", "T9998"],
+  ["attack-tactic", "TA9998"],
+] as const)(
+  "attaches re-keyed %s records to the canonical entity without replacing it",
+  async (type, externalId) => {
+    const entity: IntelEntity = {
+      id: "canonical-" + type,
+      type,
+      externalId,
+      name: externalId,
+      description: "Original intelligence",
+      aliases: [],
+      data: {},
+      provenance: {
+        sourceId: "mitre",
+        sourceName: "Original",
+        retrievedAt: new Date().toISOString(),
+        redistributable: true,
+      },
+    };
+    await repo.putEntity(entity);
+    const imported = {
+      ...entity,
+      id: "secondary-" + type,
+      description: "Secondary copy",
+      aliases: ["Imported " + type],
+      provenance: {
+        ...entity.provenance,
+        sourceId: "taxii",
+        sourceName: "TAXII",
+      },
+    };
+    const input = {
+      entity: imported,
+      provenance: imported.provenance,
+      evidence: [],
+      relationships: [],
+    };
+    expect(await ingestRecord(repo, input)).toBe(entity.id);
+    expect(await ingestRecord(repo, input)).toBe(entity.id);
+    expect(await repo.entity(entity.id)).toEqual(entity);
+    expect(await repo.entity(imported.id)).toBeNull();
+    expect((await repo.resolveAlias(imported.aliases[0]!, type))[0]?.id).toBe(
+      entity.id,
+    );
+    expect(
+      await repo.db
+        .prepare("SELECT COUNT(*) AS n FROM entity_sources WHERE entity_id=?")
+        .bind(entity.id)
+        .first(),
+    ).toEqual({ n: 2 });
+  },
+);
+it("routes approved TAXII requests through the private binding and retains request safeguards", async () => {
+  const request = vi
+    .fn()
+    .mockImplementation(async () =>
+      Response.json({ objects: [], more: false }),
+    );
+  const env = {
+    DB: repo.db,
+    OPENCTI_VPC: { fetch: request },
+    TAXII_ENABLED: "true",
+    TAXII_ENDPOINT: "https://opencti.example.test/taxii/objects/",
+    TAXII_ALLOWED_HOST: "opencti.example.test",
+    TAXII_API_KEY: "test-only",
+    TAXII_PAGE_LIMIT: "25",
+  } as unknown as AppEnv;
+  await getFeed(env, "taxii").fetch();
+  const [url, init] = request.mock.calls[0]!;
+  expect(String(url)).toBe(
+    "http://opencti.example.test/taxii/objects/?limit=25",
+  );
+  expect(init).toMatchObject({
+    redirect: "manual",
+    headers: { Authorization: "Bearer test-only" },
+  });
+  request.mockClear();
+  await expect(
+    getFeed(
+      {
+        ...env,
+        TAXII_ENDPOINT: "https://unapproved.example.test/",
+      } as AppEnv,
+      "taxii",
+    ).fetch(),
+  ).rejects.toThrow("approved HTTPS");
+  expect(request).not.toHaveBeenCalled();
+  request.mockResolvedValueOnce(
+    new Response(null, {
+      status: 302,
+      headers: { Location: "https://unapproved.example.test/" },
+    }),
+  );
+  await expect(getFeed(env, "taxii").fetch()).rejects.toThrow("302");
+});
+it.each([undefined, 0, 1001, NaN, 2.5, 25])(
+  "bounds the TAXII page limit (%s)",
+  async (pageLimit) => {
+    const request = vi
+      .fn<typeof fetch>()
+      .mockImplementation(async () => Response.json({ objects: [] }));
+    const feed = new OptionalFeed(
+      "taxii",
+      "TAXII",
+      repo,
+      {
+        enabled: true,
+        endpoint: "https://approved.example.test/objects/",
+        allowedHost: "approved.example.test",
+        pageLimit,
+      },
+      request,
+    );
+    await feed.fetch();
+    expect(
+      new URL(String(request.mock.calls[0]![0])).searchParams.get("limit"),
+    ).toBe(pageLimit === 25 ? "25" : "100");
+  },
+);
 it("resolves MISP aliases to an explicit MITRE canonical group without inventing attribution", async () => {
   const provenance = {
     sourceId: "mitre",
@@ -69,7 +194,9 @@ it("resolves MISP aliases to an explicit MITRE canonical group without inventing
   expect(
     (
       await repo.db
-        .prepare("SELECT COUNT(*) AS n FROM entity_sources")
+        .prepare(
+          "SELECT COUNT(*) AS n FROM entity_sources WHERE entity_id='intrusion-set--11111111-1111-4111-8111-111111111111'",
+        )
         .first<{ n: number }>()
     )?.n,
   ).toBe(2);

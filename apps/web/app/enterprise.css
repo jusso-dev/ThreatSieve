@@ -513,6 +513,16 @@ textarea {
   border-bottom: 1px solid var(--border);
   gap: 22px;
   margin-top: 24px;
+  min-width: 0;
+  max-width: 100%;
+}
+.intelligence-lineage,
+.assessment-history,
+.assessment-slot,
+.history-entry {
+  max-width: 100%;
+  min-width: 0;
+  overflow-wrap: anywhere;
 }
 .dossier-tabs button {
   border: 0;
@@ -676,6 +686,9 @@ textarea {
   }
   .page-heading .actions {
     margin-left: 0;
+    flex-wrap: wrap;
+    min-width: 0;
+    max-width: 100%;
   }
   .work-metrics {
     gap: 16px;

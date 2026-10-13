@@ -28,7 +28,19 @@ import { percent, relativeTime } from "@/lib/utils";
 import { Modal } from "./ui/modal";
 import { Button } from "./ui/button";
 import { PageHeader, DataState } from "./shell";
-import type { Assessment } from "../../../packages/schemas/src/index";
+import {
+  EnvironmentSchema,
+  type Assessment,
+  type CustomerEnvironment,
+} from "../../../packages/schemas/src/index";
+import { operationalUrgency } from "../../../packages/enterprise/src/urgency";
+import {
+  cvePriorityTitle,
+  evaluateCustomerExposure,
+  exposureRelevanceLabel,
+  type ExposureClaim,
+} from "../../../packages/enterprise/src/scoring";
+import { effectiveRecommendations } from "../../../packages/database/src/decision-state";
 import { useViewState, copyText } from "@/lib/view-state";
 import { QueryField, FilterSelect, EmptyResults } from "./filter-controls";
 import { SavedViews } from "./saved-views";
@@ -42,6 +54,79 @@ export function Severity({ value }: { value: string }) {
       {value}
     </span>
   );
+}
+// leaf-1.2.2 (audit finding 5): threat severity, evidence confidence, customer
+// relevance and operational urgency are four SEPARATELY LABELLED values. A
+// "High" threat badge never shares a row with an unexplained "Low" relevance
+// badge — every value carries its own label. Unknown renders as "Unknown",
+// never 0% (finding 7 vocabulary): a claim without supporting evidence is
+// unknown, not zero, and routes to the enrichment backlog.
+const confidenceDisplay = (a: Assessment) =>
+  a.evidence.length ? percent(a.confidence) : "Unknown";
+function productsFrom(a: Assessment) {
+  return a.evidence.flatMap((e) => {
+    const product =
+      typeof e.data.product === "string" ? e.data.product : undefined;
+    const version =
+      typeof e.data.version === "string" ? e.data.version : undefined;
+    const vendor =
+      typeof e.data.vendor === "string" ? e.data.vendor : undefined;
+    return product || version || vendor
+      ? [{ product, version, vendor }]
+      : [];
+  });
+}
+function exposureFor(
+  a: Assessment,
+  environment: CustomerEnvironment | undefined,
+): ExposureClaim {
+  return evaluateCustomerExposure({
+    environment: environment ?? EnvironmentSchema.parse({}),
+    products: productsFrom(a),
+    kev:
+      a.evidence.some((e) => e.data.kev === true) ||
+      a.customer.reasons.includes("CISA_KEV"),
+    observations: a.customer.observed
+      ? [{ observableId: a.observable.id }]
+      : [],
+  });
+}
+// leaf-1.3.2: empty profile → Unknown, never 0% relevance from KEV alone
+const relevanceDisplay = (
+  a: Assessment,
+  environment?: CustomerEnvironment,
+) => {
+  if (!a.evidence.length) return "Unknown";
+  const claim = exposureFor(a, environment);
+  return exposureRelevanceLabel(claim, a.customer.relevance);
+};
+function priorityTitle(a: Assessment, claim: ExposureClaim) {
+  if (a.observable.type === "cve") return cvePriorityTitle(claim);
+  if (a.role.value === "c2") return "Command & control infrastructure";
+  if (a.observable.type === "sha256") return "Known malware payload";
+  return "Potential threat activity";
+}
+function exposureMetaLine(a: Assessment, claim: ExposureClaim) {
+  if (claim.applicability === "unknown")
+    return "Applicability to your environment unknown";
+  if (claim.matchedAssetIds.length)
+    return `${claim.matchedAssetIds.length} matched assets`;
+  if (claim.hasSighting || a.customer.observed)
+    return "SIEM/EDR sighting recorded";
+  return `${a.evidence.length} evidence records`;
+}
+function urgencyDisplay(a: Assessment) {
+  const { urgency, unknownComponents } = operationalUrgency(a);
+  // Zero evidence means the assessment is unrankable — unknown urgency, never
+  // a low score.
+  if (unknownComponents.includes("evidenceConfidence")) return "Unknown";
+  return percent(urgency) + (unknownComponents.length ? " (partial)" : "");
+}
+function urgencyDetail(a: Assessment) {
+  const unknown = operationalUrgency(a).unknownComponents;
+  return unknown.length
+    ? "Unknown inputs treated as neutral: " + unknown.join(", ")
+    : undefined;
 }
 export function Operations() {
   const canWrite = usePermission("assessment:write");
@@ -103,7 +188,9 @@ export function Operations() {
       review: number;
     };
     priority: Assessment[];
+    enrichment_backlog: Assessment[];
   }>("v1/assessments?" + params.toString());
+  const { data: environment } = useApi<CustomerEnvironment>("v1/environment");
   const [observable, setObservable] = useState("");
   const [showAssess, setShowAssess] = useState(false);
   useEffect(() => {
@@ -125,6 +212,7 @@ export function Operations() {
   };
   const filtered = all;
   const priorities = data?.priority ?? [];
+  const backlog = data?.enrichment_backlog ?? [];
   const columns: ColumnDef<typeof assessmentTableFeatures, Assessment>[] = [
     {
       header: "Observable",
@@ -156,7 +244,7 @@ export function Operations() {
       ),
     },
     {
-      header: "Priority",
+      header: "Threat severity",
       cell: ({ row }) => <Severity value={row.original.severity} />,
     },
     {
@@ -184,14 +272,33 @@ export function Operations() {
       ),
     },
     {
-      header: "Confidence",
+      header: "Overall confidence",
+      cell: ({ row }) =>
+        row.original.evidence.length ? (
+          <div className="confidence-cell">
+            <span className="confidence-track">
+              <i style={{ width: percent(row.original.confidence) }} />
+            </span>
+            <span className="mono">{percent(row.original.confidence)}</span>
+          </div>
+        ) : (
+          <span className="muted mono">Unknown</span>
+        ),
+    },
+    {
+      header: "Customer relevance",
       cell: ({ row }) => (
-        <div className="confidence-cell">
-          <span className="confidence-track">
-            <i style={{ width: percent(row.original.confidence) }} />
-          </span>
-          <span className="mono">{percent(row.original.confidence)}</span>
-        </div>
+        <span className="mono">
+          {relevanceDisplay(row.original, environment)}
+        </span>
+      ),
+    },
+    {
+      header: "Operational urgency",
+      cell: ({ row }) => (
+        <span className="mono" title={urgencyDetail(row.original)}>
+          {urgencyDisplay(row.original)}
+        </span>
       ),
     },
     {
@@ -309,7 +416,7 @@ export function Operations() {
             apply({ ...filters, view: "attention", severity: "critical" })
           }
         >
-          <span className="text-red">Critical</span>
+          <span className="text-red">Critical severity</span>
           <strong>{summary.critical.toString().padStart(2, "0")}</strong>
           <small>Immediate investigation</small>
         </button>
@@ -318,7 +425,7 @@ export function Operations() {
             apply({ ...filters, view: "attention", severity: "high" })
           }
         >
-          <span className="text-amber">High priority</span>
+          <span className="text-amber">High severity</span>
           <strong>{summary.high.toString().padStart(2, "0")}</strong>
           <small>Elevated threat activity</small>
         </button>
@@ -345,51 +452,160 @@ export function Operations() {
               Priority intelligence{" "}
               <span className="count-badge">{priorities.length}</span>
             </h2>
-            <span className="muted">Ordered by customer relevance</span>
+            <span className="muted">Ordered by operational urgency</span>
           </div>
           <section className="priority-grid">
-            {priorities.map((a, i) => (
+            {priorities.map((a, i) => {
+              const claim = exposureFor(a, environment);
+              return (
               <Link
                 className={"priority-card priority-" + a.severity}
                 key={a.assessment_id}
                 href={investigationHref(a.assessment_id)}
               >
                 <div className="priority-top">
-                  <Severity value={a.severity} />
+                  <span>
+                    <span className="muted">Threat severity</span>{" "}
+                    <Severity value={a.severity} />
+                  </span>
                   <span className="mono muted">
                     {String(i + 1).padStart(2, "0")}
                   </span>
                 </div>
-                <h3>
-                  {a.observable.type === "cve"
-                    ? "Exploited vulnerability exposure"
-                    : a.role.value === "c2"
-                      ? "Command & control infrastructure"
-                      : a.observable.type === "sha256"
-                        ? "Known malware payload"
-                        : "Potential threat activity"}
-                </h3>
+                <h3>{priorityTitle(a, claim)}</h3>
                 <p className="priority-observable mono">
                   {a.observable.normalizedValue}
                 </p>
-                <div className="priority-relevance">
-                  <strong>{percent(a.customer.relevance)}</strong>
-                  <span>customer relevance</span>
+                {claim.kev && claim.applicability === "unknown" ? (
+                  <p className="muted" style={{ fontSize: 12, margin: "4px 0" }}>
+                    Known exploited vulnerability · Applicability to your
+                    environment unknown
+                  </p>
+                ) : null}
+                <div
+                  className="priority-relevance"
+                  title={urgencyDetail(a)}
+                >
+                  <strong>{urgencyDisplay(a)}</strong>
+                  <span>Operational urgency</span>
                   <ArrowUpRight size={19} />
                 </div>
                 <div className="priority-meta">
                   <span>
-                    {a.customer.exposedAssets > 0
-                      ? `${a.customer.exposedAssets} exposed assets`
-                      : `${a.evidence.length} evidence records`}
+                    Overall confidence ·{" "}
+                    <span className="mono">{confidenceDisplay(a)}</span>
                   </span>
+                  <span>
+                    Customer relevance ·{" "}
+                    <span className="mono">
+                      {relevanceDisplay(a, environment)}
+                    </span>
+                  </span>
+                </div>
+                <div className="priority-meta">
+                  <span>{exposureMetaLine(a, claim)}</span>
                   <span>
                     {a.human_review ? "Review required" : "Ready for action"}
                   </span>
                 </div>
               </Link>
-            ))}
+              );
+            })}
           </section>
+          {backlog.length > 0 && (
+            <>
+              <div className="section-title">
+                <h2>
+                  Enrichment backlog{" "}
+                  <span className="count-badge">{backlog.length}</span>
+                </h2>
+                <span className="muted">
+                  Insufficient evidence — unknown, not low. Enrich before these
+                  can be ranked. Showing the 20 most recent.
+                </span>
+              </div>
+              <section
+                className="intelligence-panel"
+                aria-label="Enrichment backlog"
+              >
+                <div className="table-scroll">
+                  <table className="intel-table">
+                    <thead>
+                      <tr>
+                        <th>Observable</th>
+                        <th>Threat severity</th>
+                        <th>Evidence confidence</th>
+                        <th>Customer relevance</th>
+                        <th>Operational urgency</th>
+                        <th>Recommended action</th>
+                        <th></th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {backlog.map((a) => (
+                        <tr key={a.assessment_id}>
+                          <td>
+                            <Link
+                              href={investigationHref(a.assessment_id)}
+                              className="observable-cell"
+                            >
+                              <span className="observable-icon">
+                                {a.observable.type === "domain" ? (
+                                  <Globe size={17} />
+                                ) : a.observable.type.includes("sha") ? (
+                                  <Hash size={17} />
+                                ) : (
+                                  <Server size={17} />
+                                )}
+                              </span>
+                              <span>
+                                <strong>{a.observable.normalizedValue}</strong>
+                                <small>{a.observable.type}</small>
+                              </span>
+                            </Link>
+                          </td>
+                          <td>
+                            <Severity value={a.severity} />
+                          </td>
+                          <td>
+                            <span className="mono">
+                              {confidenceDisplay(a)}
+                            </span>
+                          </td>
+                          <td>
+                            <span className="mono">
+                              {relevanceDisplay(a, environment)}
+                            </span>
+                          </td>
+                          <td>
+                            <span className="mono" title={urgencyDetail(a)}>
+                              {urgencyDisplay(a)}
+                            </span>
+                          </td>
+                          <td>
+                            <span className="review-status">
+                              {effectiveRecommendations(a)[0]?.action ??
+                                "enrich"}
+                            </span>
+                          </td>
+                          <td>
+                            <Link
+                              aria-label={
+                                "Enrich " + a.observable.normalizedValue
+                              }
+                              href={investigationHref(a.assessment_id)}
+                            >
+                              Enrich <ArrowUpRight size={15} />
+                            </Link>
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              </section>
+            </>
+          )}
           <section className="intelligence-panel">
             <div className="panel-toolbar">
               <div className="tabs">
@@ -421,10 +637,10 @@ export function Operations() {
                 onChange={(v) => change("q", v, true)}
               />
               <FilterSelect
-                label="Priority"
+                label="Threat severity"
                 value={filters.severity ?? ""}
                 options={[
-                  ["", "Any priority"],
+                  ["", "Any severity"],
                   ["critical", "Critical"],
                   ["high", "High"],
                   ["medium", "Medium"],
@@ -462,7 +678,7 @@ export function Operations() {
                   ["newest", "Newest first"],
                   ["oldest", "Oldest first"],
                   ["confidence", "Highest confidence"],
-                  ["relevance", "Most relevant"],
+                  ["relevance", "Highest operational urgency"],
                 ]}
                 onChange={(v) => change("sort", v)}
               />

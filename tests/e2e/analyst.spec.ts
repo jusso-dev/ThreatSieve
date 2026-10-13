@@ -63,7 +63,9 @@ test("source operations, inventory and responsive workspace render", async ({
     /FortiGate/,
   );
   await page.goto("/");
-  await expect(page.getByRole("table")).toBeVisible();
+  await expect(
+    page.getByRole("table").filter({ hasText: "Overall confidence" }),
+  ).toBeVisible();
   await page.screenshot({
     path: "artifacts/operations-desktop.png",
     animations: "disabled",
@@ -91,7 +93,9 @@ test("dialogs contain keyboard focus and restore it, and the sidebar rail spans 
   page,
 }) => {
   await page.goto("/");
-  await expect(page.getByRole("table")).toBeVisible();
+  await expect(
+    page.getByRole("table").filter({ hasText: "Overall confidence" }),
+  ).toBeVisible();
   const rail = await page.locator(".app-shell").evaluate((element) => ({
     height: element.getBoundingClientRect().height,
     pageHeight: document.documentElement.scrollHeight,

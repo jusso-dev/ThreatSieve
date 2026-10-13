@@ -42,29 +42,40 @@ export function scoreConfidence(
         0,
       ) / ev.length
     : 0;
+  // Factor codes name what each factor measures (leaf 1.2.3). The code on
+  // this factor is evidence quality — mean evidence confidence weighted by
+  // source reliability — NOT source multiplicity; corroboration is the
+  // independent-group factor below.
   add(
-    ev.length ? "MULTI_SOURCE_CONFIRMATION" : "LOW_EVIDENCE",
+    ev.length ? "EVIDENCE_RELIABILITY" : "LOW_EVIDENCE",
     reliability,
     0.35,
     ids,
   );
+  // MULTI_SOURCE_CONFIRMATION only with ≥2 independent source groups; a
+  // single independent group gets SINGLE_SOURCE_SUPPORT; no source at all is
+  // LOW_EVIDENCE (never "confirmation").
   add(
-    groups.size > 1 ? "MULTI_SOURCE_CONFIRMATION" : "SINGLE_SOURCE_ONLY",
+    groups.size > 1
+      ? "MULTI_SOURCE_CONFIRMATION"
+      : groups.size > 0
+        ? "SINGLE_SOURCE_SUPPORT"
+        : "LOW_EVIDENCE",
     Math.min(groups.size / 3, 1),
     0.15,
     ids,
   );
-  add("LOW_EVIDENCE", strength, 0.2, ids);
-  add("LOW_EVIDENCE", Math.max(probability, 1 - probability), 0.2, ids);
+  add("EVIDENCE_STRENGTH", strength, 0.2, ids);
+  add(
+    "CLASSIFIER_DECISIVENESS",
+    Math.max(probability, 1 - probability),
+    0.2,
+    ids,
+  );
   const direct = ev.filter((e) =>
     ["telemetry", "sandbox", "analyst"].includes(e.type),
   );
-  add(
-    "CUSTOMER_OBSERVED",
-    direct.length ? 1 : 0,
-    0.1,
-    direct.map((e) => e.id),
-  );
+  add("DIRECT_EVIDENCE", direct.length ? 1 : 0, 0.1, direct.map((e) => e.id));
   const stale = ev.filter(
     (e) => e.observedAt && now - Date.parse(e.observedAt) > 30 * 86400000,
   );
@@ -82,7 +93,7 @@ export function scoreConfidence(
   if (ev.some((e) => e.data.sharedInfrastructure === true))
     add("SHARED_INFRASTRUCTURE", 1, -0.3, ids);
   if (!ev.length) add("LOW_EVIDENCE", 1, -1, []);
-  if (bundle.truncated) add("LOW_EVIDENCE", 1, -0.2, ids);
+  if (bundle.truncated) add("TRUNCATED_EVIDENCE", 1, -0.2, ids);
   return {
     confidence: clamp(factors.reduce((sum, f) => sum + f.value * f.weight, 0)),
     factors,
@@ -138,8 +149,11 @@ export function reasonCodesFor(
   independentSources: number,
 ): ReasonCode[] {
   const codes = new Set<ReasonCode>();
+  // Source-support codes follow the independent-group count, matching the
+  // confidence factors: corroboration only when ≥2 independent groups.
   if (independentSources > 1) codes.add("MULTI_SOURCE_CONFIRMATION");
-  else codes.add("SINGLE_SOURCE_ONLY");
+  else if (independentSources > 0) codes.add("SINGLE_SOURCE_SUPPORT");
+  else codes.add("LOW_EVIDENCE");
   for (const e of bundle.evidence) {
     if (e.data.role === "c2") codes.add("KNOWN_C2");
     if (

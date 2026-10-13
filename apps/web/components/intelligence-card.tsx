@@ -2,33 +2,54 @@
 import Link from "next/link";
 import { EntityTags } from "./entity-tags";
 import { useState } from "react";
-import { ArrowLeft, Copy } from "lucide-react";
-import { useApi } from "@/lib/api";
+import { ArrowLeft, Copy, RefreshCw } from "lucide-react";
+import { api, useApi } from "@/lib/api";
 import { absoluteTime } from "@/lib/utils";
 import { copyText, defang } from "@/lib/view-state";
 import { workspaces } from "@/lib/workspace";
 import type { Dossier } from "../../../packages/enterprise/src/types";
+import {
+  freshness,
+  reassessmentTrigger,
+} from "../../../packages/intel/src/freshness";
 import { PageHeader, DataState } from "./shell";
 import { Button } from "./ui/button";
 import { EvidenceExplorer } from "./evidence-explorer";
 import { IntelligenceGraph } from "./intelligence-graph";
 import { PinToWorkspace } from "./workspace-references";
+import { ReassessmentProgress } from "./reassessment-progress";
 
 export function IntelligenceCard({ id }: { id: string }) {
   const { data, error, loading, reload } = useApi<Dossier>(
     "v1/entities/" + encodeURIComponent(id) + "/dossier",
   );
   const [tab, setTab] = useState("overview"),
-    [days, setDays] = useState("30");
+    [days, setDays] = useState("30"),
+    [reassessing, setReassessing] = useState(false),
+    [reassessmentJob, setReassessmentJob] = useState(""),
+    [message, setMessage] = useState("");
   if (!data || loading || error)
     return <DataState loading={loading} error={error} />;
   const e = data.entity,
     s = data.scores,
-    a = data.assessments[0],
-    dates = data.evidence
-      .map((x) => x.observedAt ?? x.createdAt)
-      .filter((x) => Number.isFinite(Date.parse(x)))
-      .sort();
+    a = data.assessments[0];
+  // Indicator activity is derived from evidence observation times only
+  // (packages/intel/src/freshness.ts) — never from retrieval/processing time.
+  const freshnessState = freshness(data.evidence);
+  const reassess = reassessmentTrigger(freshnessState);
+  const queueReassessment = () => {
+    if (!a) return;
+    setReassessing(true);
+    void api<{ job_id: string }>(
+      "v1/assessments/" + a.assessment_id + "/reclassify",
+      { method: "POST" },
+    )
+      .then((r) => setReassessmentJob(r.job_id))
+      .catch(() =>
+        setMessage("We couldn’t queue reclassification. Please try again."),
+      )
+      .finally(() => setReassessing(false));
+  };
   const classification =
     a?.effective_classification ??
     a?.malicious.classification ??
@@ -78,35 +99,108 @@ export function IntelligenceCard({ id }: { id: string }) {
       <div className="dossier-verdict">
         <strong>{classification}</strong>
         <span>
-          Threat <b>{s.threat.value ?? "Unknown"}</b>
+          Threat{" "}
+          <b>
+            {s.threat.value === null
+              ? "Unknown"
+              : s.threat.value + "/100 heuristic"}
+          </b>
         </span>
         <span>
           Confidence{" "}
           <b>
-            {s.confidence.value === null ? "Unknown" : s.confidence.value + "%"}
+            {s.confidence.value === null
+              ? "Unknown"
+              : s.confidence.value + "/100 heuristic"}
           </b>
         </span>
         <span>
-          Relevance <b>{s.relevance.value ?? "Unknown"}</b>
+          Relevance{" "}
+          <b>
+            {s.relevance.value === null
+              ? "Unknown"
+              : s.relevance.value + "/100 heuristic"}
+          </b>
         </span>
         <span className={"priority-text " + s.priority.label}>
           {s.priority.label} priority
         </span>
+        <span>
+          Activity{" "}
+          <b
+            className={
+              freshnessState.activity === "active"
+                ? "text-green"
+                : "text-amber"
+            }
+          >
+            {freshnessState.activity === "unknown"
+              ? "Unknown"
+              : freshnessState.activity}
+          </b>
+        </span>
+        {freshnessState.activity !== "active" && (
+          <span className="tag">
+            {freshnessState.activity === "expired"
+              ? "EXPIRED INDICATOR"
+              : freshnessState.activity === "stale"
+                ? "STALE EVIDENCE"
+                : "ACTIVITY UNKNOWN"}
+          </span>
+        )}
       </div>
       <dl className="dossier-facts">
         <div>
-          <dt>First supporting observation</dt>
-          <dd>{dates[0] ? absoluteTime(dates[0]) : "Not supplied"}</dd>
+          <dt>First actual observation</dt>
+          <dd>
+            {freshnessState.first_observed
+              ? absoluteTime(freshnessState.first_observed)
+              : "Unknown"}
+          </dd>
         </div>
         <div>
-          <dt>Last supporting observation</dt>
-          <dd>{dates.at(-1) ? absoluteTime(dates.at(-1)!) : "Not supplied"}</dd>
+          <dt>Last actual observation</dt>
+          <dd>
+            {freshnessState.last_observed
+              ? absoluteTime(freshnessState.last_observed)
+              : "Unknown"}
+          </dd>
         </div>
         <div>
           <dt>Source assertions</dt>
           <dd>{data.provenance.length}</dd>
         </div>
       </dl>
+      {reassess.trigger && (
+        <p className="notice" role="status">
+          <strong>Expired indicator · historical association only.</strong>{" "}
+          Last actual observation{" "}
+          {freshnessState.last_observed
+            ? absoluteTime(freshnessState.last_observed)
+            : "unknown"}
+          . Historical malicious associations are retained, but fresh evidence
+          is required before this indicator is treated as a current threat (
+          {reassess.reason_codes.join(", ")}).{" "}
+          {a && (
+            <button
+              className="text-link"
+              disabled={reassessing}
+              onClick={queueReassessment}
+            >
+              <RefreshCw size={12} />
+              Reassess
+            </button>
+          )}
+        </p>
+      )}
+      {reassessmentJob && (
+        <ReassessmentProgress key={reassessmentJob} jobId={reassessmentJob} />
+      )}
+      {message && (
+        <p className="notice" role="status">
+          {message}
+        </p>
+      )}
       <nav className="dossier-tabs" aria-label="Intelligence dossier sections">
         {[
           "overview",
@@ -153,7 +247,9 @@ export function IntelligenceCard({ id }: { id: string }) {
                 >
                   <summary>
                     {key[0]!.toUpperCase() + key.slice(1)} ·{" "}
-                    {s[key].value ?? "Unknown"}
+                    {s[key].value === null
+                      ? "Unknown"
+                      : s[key].value + "/100 heuristic"}
                   </summary>
                   {s[key].factors.length ? (
                     <table className="factor-table">

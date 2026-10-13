@@ -195,6 +195,9 @@ export function scoreDossier(
     ...environment.identityProviders,
     ...environment.securityProducts,
     ...environment.exposedServices,
+    ...(environment.assets ?? []).flatMap((a) =>
+      [a.product, a.vendor].filter((s): s is string => Boolean(s)),
+    ),
   ].map((s) => s.toLowerCase());
   const match = (values: string[], keys: string[]) =>
     evidence.filter((e) =>
@@ -311,6 +314,7 @@ export function scoreDossier(
       relevance,
       evidence.length > 0 &&
         (tech.length > 0 ||
+          (environment.assets ?? []).length > 0 ||
           environment.industries.length > 0 ||
           environment.countries.length > 0 ||
           sightings.length > 0 ||
@@ -341,6 +345,7 @@ export function scoreDossier(
     });
   if (
     !tech.length &&
+    !(environment.assets ?? []).length &&
     !environment.industries.length &&
     !environment.countries.length
   )
@@ -379,4 +384,183 @@ export function scoreDossier(
     independentSources: groups.size,
     entityId: entity.id,
   };
+}
+
+/** 90-day inventory freshness window for exposure claims. */
+const INVENTORY_STALE_MS = 90 * 86400000;
+
+export type ExposureApplicability = "unknown" | "matched" | "unmatched";
+
+export interface ExposureProductHint {
+  product?: string;
+  version?: string;
+  vendor?: string;
+}
+
+/** Pure observation rows; callers query customer_observations and pass them in. */
+export interface ExposureObservation {
+  observableId?: string;
+  observedAt?: string;
+}
+
+export interface ExposureClaim {
+  applicability: ExposureApplicability;
+  /** Null when the environment cannot ground applicability — never fabricate 0%. */
+  relevance: number | null;
+  matchedAssetIds: string[];
+  wording: string[];
+  kev: boolean;
+  hasSighting: boolean;
+  inventoryMayBeOutOfDate: boolean;
+}
+
+/** True when the profile has assets or tech strings that could ground a match. */
+export function hasGroundingInventory(
+  environment: CustomerEnvironment,
+): boolean {
+  return (
+    (environment.assets ?? []).length > 0 ||
+    environment.technologies.length > 0 ||
+    environment.products.length > 0 ||
+    environment.vendors.length > 0 ||
+    environment.software.length > 0
+  );
+}
+
+function tokenEquals(a: string, b: string) {
+  return a.trim().toLowerCase() === b.trim().toLowerCase();
+}
+
+function inventoryTimestampStale(
+  iso: string | undefined,
+  now: number,
+): boolean {
+  if (!iso) return false;
+  const t = Date.parse(iso);
+  return Number.isFinite(t) && now - t > INVENTORY_STALE_MS;
+}
+
+/**
+ * Customer exposure wording (leaf 1.3.2).
+ * KEV ≠ "your exposed asset". Empty inventory → applicability unknown, relevance null.
+ */
+export function evaluateCustomerExposure(input: {
+  environment: CustomerEnvironment;
+  products?: ExposureProductHint[];
+  kev?: boolean;
+  observations?: ExposureObservation[];
+  now?: number;
+}): ExposureClaim {
+  const now = input.now ?? Date.now();
+  const kev = Boolean(input.kev);
+  const observations = input.observations ?? [];
+  const hasSighting = observations.length > 0;
+  const products = (input.products ?? []).filter(
+    (p) => typeof p.product === "string" && p.product.trim().length > 0,
+  );
+  const wording: string[] = [];
+  if (kev) wording.push("Known exploited vulnerability");
+  if (hasSighting)
+    wording.push("SIEM/EDR sighting recorded for this observable");
+
+  if (!hasGroundingInventory(input.environment)) {
+    wording.push("Applicability to your environment unknown");
+    return {
+      applicability: "unknown",
+      relevance: null,
+      matchedAssetIds: [],
+      wording,
+      kev,
+      hasSighting,
+      inventoryMayBeOutOfDate: false,
+    };
+  }
+
+  const matched = (input.environment.assets ?? []).filter((asset) =>
+    products.some((hint) => {
+      if (!tokenEquals(asset.product, hint.product!)) return false;
+      if (
+        asset.version &&
+        hint.version &&
+        !tokenEquals(asset.version, hint.version)
+      )
+        return false;
+      return true;
+    }),
+  );
+  const matchedAssetIds = matched.map((a) => a.id);
+  const inventoryMayBeOutOfDate = matched.some(
+    (a) =>
+      inventoryTimestampStale(a.inventoryFreshness, now) ||
+      inventoryTimestampStale(a.lastSeenAt, now),
+  );
+
+  if (matched.length) {
+    const freshnessBits = matched
+      .map((a) => a.inventoryFreshness)
+      .filter((s): s is string => Boolean(s));
+    wording.push(
+      `Matched asset${matched.length === 1 ? "" : "s"}: ${matchedAssetIds.join(", ")}`,
+    );
+    if (freshnessBits.length)
+      wording.push(`Inventory freshness: ${freshnessBits.join(", ")}`);
+    if (inventoryMayBeOutOfDate)
+      wording.push(
+        "Inventory may be out of date; treat this exposure claim as uncertain",
+      );
+    else wording.push("Product match against your asset inventory");
+    const criticalityWeight = Math.max(
+      ...matched.map((a) =>
+        a.criticality === "critical"
+          ? 1
+          : a.criticality === "high"
+            ? 0.85
+            : a.criticality === "medium"
+              ? 0.6
+              : 0.4,
+      ),
+    );
+    return {
+      applicability: "matched",
+      relevance: criticalityWeight,
+      matchedAssetIds,
+      wording,
+      kev,
+      hasSighting,
+      inventoryMayBeOutOfDate,
+    };
+  }
+
+  // Profile present but no asset/product match — not "your exposed asset".
+  wording.push("No matching asset in your inventory");
+  return {
+    applicability: "unmatched",
+    relevance: 0,
+    matchedAssetIds: [],
+    wording,
+    kev,
+    hasSighting,
+    inventoryMayBeOutOfDate: false,
+  };
+}
+
+/** CVE priority-card title. Never implies customer exposure from KEV alone. */
+export function cvePriorityTitle(claim: ExposureClaim): string {
+  if (claim.applicability === "matched") return "Matched asset vulnerability";
+  if (claim.kev) return "Known exploited vulnerability";
+  if (claim.applicability === "unknown")
+    return "Applicability to your environment unknown";
+  return "Vulnerability intelligence";
+}
+
+/** Relevance badge text: unknown applicability never renders as 0%. */
+export function exposureRelevanceLabel(
+  claim: ExposureClaim,
+  storedRelevance?: number,
+): string {
+  if (claim.applicability === "unknown" || claim.relevance === null)
+    return "Unknown";
+  const value = claim.relevance ?? storedRelevance;
+  if (value == null) return "Unknown";
+  return `${Math.round(value * 100)}%`;
 }

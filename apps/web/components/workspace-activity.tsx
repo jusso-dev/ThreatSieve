@@ -8,6 +8,13 @@ import { Button } from "./ui/button";
 import { DataState } from "./shell";
 import { relativeTime } from "@/lib/utils";
 import type { WorkObject } from "../../../packages/schemas/src/enterprise";
+
+const matchStatusLabel: Record<string, string> = {
+  queued: "Queued",
+  running: "Running",
+  complete: "Complete",
+  failed: "Failed",
+};
 export function WorkspaceMatches({
   object,
   onAccept,
@@ -27,8 +34,12 @@ export function WorkspaceMatches({
       matched_at: string;
       automatic_member: number;
       score: number | null;
+      match_status?: "queued" | "running" | "complete" | "failed";
+      last_evaluated_at?: string | null;
     }[];
     next_cursor: string | null;
+    match_status?: "queued" | "running" | "complete" | "failed";
+    last_evaluated_at?: string | null;
   }>(
     "v1/workspace/" +
       object.id +
@@ -56,6 +67,12 @@ export function WorkspaceMatches({
               {m.automatic_member ? "Playbook membership · " : ""}
               {m.type} · {m.evidence_ids.length} supporting records ·{" "}
               {relativeTime(m.matched_at)}
+              {m.match_status
+                ? " · " + (matchStatusLabel[m.match_status] ?? "Unknown")
+                : ""}
+              {m.last_evaluated_at
+                ? " · last evaluated " + relativeTime(m.last_evaluated_at)
+                : ""}
             </small>
           </div>
           <span>Threat {m.score ?? "unknown"}</span>
@@ -92,8 +109,14 @@ export function WorkspaceMatches({
       ))}
       {data && !data.data.length && (
         <p className="muted">
-          No matches yet. Active requirements, watchlists and published
-          collections process incoming intelligence asynchronously.
+          {data.match_status
+            ? (matchStatusLabel[data.match_status] ?? "Unknown")
+            : "Not evaluated yet"}
+          {data.last_evaluated_at
+            ? " · last evaluated " + relativeTime(data.last_evaluated_at)
+            : ""}
+          . Active requirements, watchlists and published collections process
+          incoming intelligence asynchronously.
         </p>
       )}
       <div className="actions">

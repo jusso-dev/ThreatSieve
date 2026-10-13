@@ -435,6 +435,74 @@ export async function requirementCoverage(
   };
 }
 
+export type MatchStatus = "queued" | "running" | "complete" | "failed";
+
+/** Named-column upsert so ADD COLUMN on workspace_matches cannot break arity. */
+export function workspaceMatchStatement(
+  db: D1Database,
+  args: {
+    tenantId: string;
+    objectId: string;
+    entityId: string;
+    evidenceIds: string[];
+    criteria: unknown;
+    eventId: string;
+    matchedAt: string;
+    score: number | null;
+    matchStatus: MatchStatus;
+    lastEvaluatedAt: string;
+    onConflict: "update" | "ignore";
+  },
+) {
+  const conflict =
+    args.onConflict === "update"
+      ? "ON CONFLICT(tenant_id,object_id,entity_id) DO UPDATE SET evidence_ids=excluded.evidence_ids,criteria=excluded.criteria,event_id=excluded.event_id,matched_at=excluded.matched_at,score=excluded.score,match_status=excluded.match_status,last_evaluated_at=excluded.last_evaluated_at"
+      : "ON CONFLICT(tenant_id,object_id,entity_id) DO NOTHING";
+  return db
+    .prepare(
+      "INSERT INTO workspace_matches (tenant_id,object_id,entity_id,evidence_ids,criteria,event_id,matched_at,score,match_status,last_evaluated_at) VALUES(?,?,?,?,?,?,?,?,?,?) " +
+        conflict,
+    )
+    .bind(
+      args.tenantId,
+      args.objectId,
+      args.entityId,
+      JSON.stringify(args.evidenceIds),
+      JSON.stringify(args.criteria),
+      args.eventId,
+      args.matchedAt,
+      args.score,
+      args.matchStatus,
+      args.lastEvaluatedAt,
+    );
+}
+
+export function workspaceMatchMarkStatus(
+  db: D1Database,
+  args: {
+    tenantId: string;
+    objectId: string;
+    entityId: string;
+    eventId: string;
+    matchStatus: MatchStatus;
+    lastEvaluatedAt: string;
+  },
+) {
+  return workspaceMatchStatement(db, {
+    tenantId: args.tenantId,
+    objectId: args.objectId,
+    entityId: args.entityId,
+    evidenceIds: [],
+    criteria: [],
+    eventId: args.eventId,
+    matchedAt: args.lastEvaluatedAt,
+    score: null,
+    matchStatus: args.matchStatus,
+    lastEvaluatedAt: args.lastEvaluatedAt,
+    onConflict: "update",
+  });
+}
+
 export async function cachedCoverage(
   repo: OperationsRepository,
   object: WorkObject,

@@ -36,7 +36,13 @@ export function IntelligenceLibrary() {
     ...(params.get("cursor") ? { cursor: params.get("cursor")! } : {}),
   });
   const { data, error, loading, reload } = useApi<{
-    data: IntelEntity[];
+    data: Array<
+      IntelEntity & {
+        source_count?: number;
+        mirror_count?: number;
+        canonical_id?: string;
+      }
+    >;
     next_cursor: string | null;
   }>("v1/entities?" + query);
   const sources = useApi<{ data: { id: string; name: string }[] }>("v1/feeds");
@@ -173,6 +179,12 @@ export function IntelligenceLibrary() {
                           {e.description ||
                             "Source-backed observable. Open the record to inspect provenance."}
                         </p>
+                        {typeof e.source_count === "number" && (
+                          <small className="entity-lineage">
+                            Canonical · seen via {e.source_count} sources;{" "}
+                            {e.mirror_count ?? 0} mirrors
+                          </small>
+                        )}
                       </td>
                       <td>
                         <span className="entity-type">

@@ -75,9 +75,9 @@ test("personal saved views persist, apply and can be removed", async ({
   await screen
     .getByLabel("Saved triage views")
     .selectOption("High priority review");
-  await expect(screen.getByLabel("Priority", { exact: true })).toHaveValue(
-    "high",
-  );
+  await expect(
+    screen.getByLabel("Threat severity", { exact: true }),
+  ).toHaveValue("high");
   await expect(screen.getByLabel("Sort assessments")).toHaveValue("relevance");
   await screen.getByRole("button", "Delete saved view").click();
   await expect(screen.getByLabel("Saved triage views")).toHaveValue("");

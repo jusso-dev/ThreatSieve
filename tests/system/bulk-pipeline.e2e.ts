@@ -10,7 +10,12 @@ import { resolve } from "node:path";
 interface Job {
   id: string;
   pipeline_status: string;
-  totals: { processed: number; rejected: number };
+  totals: {
+    processed: number;
+    accepted: number;
+    duplicates: number;
+    rejected: number;
+  };
   stages: { stage: string; status: string; count: number }[];
 }
 async function completed(w: Parameters<typeof request>[0], id: string) {
@@ -97,7 +102,12 @@ test("concurrent identical submissions share one root job and changed payload is
     ).status,
   ).toBe(409);
   const job = await completed(workspace, jobs[0]!.job_id);
-  expect(job.totals).toEqual({ processed: 1, rejected: 0 });
+  expect(job.totals).toEqual({
+    processed: 1,
+    accepted: 1,
+    duplicates: 0,
+    rejected: 0,
+  });
   expect(
     job.stages.some((s) => s.stage === "classify" && s.status === "complete"),
   ).toBe(true);
@@ -114,7 +124,12 @@ test("bulk jobs over the 100-row processing page retain accurate totals and dedu
   expect(submitted.status).toBe(202);
   const { job_id } = await json<{ job_id: string }>(submitted);
   const job = await completed(workspace, job_id);
-  expect(job.totals).toEqual({ processed: 102, rejected: 1 });
+  expect(job.totals).toEqual({
+    processed: 102,
+    accepted: 1,
+    duplicates: 100,
+    rejected: 1,
+  });
   const list = await json<{ data: Assessment[] }>(
     await request(workspace, "/v1/assessments?q=cross-page.synthetic.test"),
   );

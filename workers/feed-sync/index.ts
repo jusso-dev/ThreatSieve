@@ -237,7 +237,7 @@ export async function normalizeFeedChunk(env: AppEnv, job: PipelineJob) {
         (record.observable
           ? (await normalise(record.observable.value, record.observable.type))
               .id
-          : record.relationships[0]?.id);
+          : undefined);
       const existed = recordId ? await repo.entity(recordId) : null;
       const id = await ingestRecord(repo, record, String(job.payload.rawKey));
       if (id) {

@@ -769,7 +769,7 @@ routes.get("/workspace/:id/matches", async (c) => {
   const f = Browse.parse(c.req.query());
   const rows = await r.db
     .prepare(
-      "SELECT m.entity_id,e.name,e.type,m.evidence_ids,m.criteria,m.matched_at,m.score,EXISTS(SELECT 1 FROM workspace_links l WHERE l.tenant_id=m.tenant_id AND l.object_id=m.object_id AND l.target_id=m.entity_id AND l.target_type='entity' AND l.relation='automation_member') AS automatic_member FROM workspace_matches m JOIN entities e ON e.id=m.entity_id WHERE m.tenant_id=? AND m.object_id=? AND m.entity_id>? AND (e.public_intel=1 OR EXISTS(SELECT 1 FROM tenant_observables t WHERE t.tenant_id=m.tenant_id AND t.observable_id=e.id)) ORDER BY m.entity_id LIMIT ?",
+      "SELECT m.entity_id,e.name,e.type,m.evidence_ids,m.criteria,m.matched_at,m.score,m.match_status,m.last_evaluated_at,EXISTS(SELECT 1 FROM workspace_links l WHERE l.tenant_id=m.tenant_id AND l.object_id=m.object_id AND l.target_id=m.entity_id AND l.target_type='entity' AND l.relation='automation_member') AS automatic_member FROM workspace_matches m JOIN entities e ON e.id=m.entity_id WHERE m.tenant_id=? AND m.object_id=? AND m.entity_id>? AND (e.public_intel=1 OR EXISTS(SELECT 1 FROM tenant_observables t WHERE t.tenant_id=m.tenant_id AND t.observable_id=e.id)) ORDER BY m.entity_id LIMIT ?",
     )
     .bind(r.tenant, c.req.param("id"), f.cursor, f.limit + 1)
     .all<{
@@ -781,13 +781,23 @@ routes.get("/workspace/:id/matches", async (c) => {
       matched_at: string;
       automatic_member: number;
       score: number | null;
+      match_status: string;
+      last_evaluated_at: string | null;
     }>();
+  const summary = await r.db
+    .prepare(
+      "SELECT match_status,last_evaluated_at FROM workspace_matches WHERE tenant_id=? AND object_id=? ORDER BY last_evaluated_at DESC LIMIT 1",
+    )
+    .bind(r.tenant, c.req.param("id"))
+    .first<{ match_status: string; last_evaluated_at: string | null }>();
   return c.json({
     data: rows.results.slice(0, f.limit).map((row) => ({
       ...row,
       evidence_ids: JSON.parse(row.evidence_ids),
       criteria: JSON.parse(row.criteria),
     })),
+    match_status: summary?.match_status,
+    last_evaluated_at: summary?.last_evaluated_at ?? null,
     next_cursor:
       rows.results.length > f.limit
         ? rows.results[f.limit - 1]!.entity_id

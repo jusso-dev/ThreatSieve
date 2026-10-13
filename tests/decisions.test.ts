@@ -200,8 +200,8 @@ describe("decision safety gates", () => {
     const a = await new ClefDecisionEngine(
       new RecordedTransport(),
     ).classifyObservable(b, sources);
-    const exported = exportStix(a);
-    expect(exported).toEqual(exportStix(a));
+    const exported = exportStix(a, { audience: "research" });
+    expect(exported).toEqual(exportStix(a, { audience: "research" }));
     expect(JSON.stringify(exported)).not.toContain("ThreatFox test fixture");
     expect(exported.objects.some((o) => o.type === "relationship")).toBe(false);
     b.evidence[0]!.provenance.redistributable = true;
@@ -209,7 +209,7 @@ describe("decision safety gates", () => {
       new RecordedTransport(),
     ).classifyObservable(b, sources);
     expect(
-      exportStix(publicAssessment).objects.find(
+      exportStix(publicAssessment, { audience: "research" }).objects.find(
         (o) => o.type === "relationship",
       )?.x_threatsieve_assertion_type,
     ).toBe("model_inferred");
@@ -278,7 +278,7 @@ it("filters redistribution per evidence record and exports analyst classificatio
   };
   a.revision = 1;
   a.updated_at = new Date(Date.parse(a.created_at) + 1000).toISOString();
-  const result = exportStix(a);
+  const result = exportStix(a, { audience: "research" });
   expect(JSON.stringify(result)).not.toContain("RESTRICTED_CANARY");
   expect(JSON.stringify(result)).not.toContain("PRIVATE_ANALYST");
   expect(JSON.stringify(result)).not.toContain("PRIVATE_REASON");

@@ -7,6 +7,10 @@ import {
   EntitySchema,
   EnvironmentSchema,
 } from "../../schemas/src/index";
+/** leaf-1.2.3 additive: canonical caveat filled into synthetic-challenge
+ * datasets that omit one. Headline accuracy must not be claimed from them. */
+export const SYNTHETIC_CHALLENGE_CAVEAT =
+  "Synthetic challenge cases are robustness probes, not a real-world accuracy or calibration dataset. Headline accuracy must not be claimed from these results.";
 export const EvaluationCase = z
   .object({
     id: z.string().min(1).max(100),
@@ -58,9 +62,23 @@ export const EvaluationDataset = z
     version: z.literal("1.0"),
     kind: z.enum(["synthetic-challenge", "analyst-labelled"]),
     description: z.string().min(10),
+    // leaf-1.2.3 additive: a dataset that reaches a report must carry its own
+    // caveat. Producers may supply one; see the transform below.
+    caveat: z.string().trim().min(10).optional(),
     cases: z.array(EvaluationCase).min(1).max(100),
   })
   .superRefine((d, ctx) => {
     if (new Set(d.cases.map((c) => c.id)).size !== d.cases.length)
       ctx.addIssue({ code: "custom", message: "Case IDs must be unique" });
-  });
+  })
+  // leaf-1.2.3 additive: evaluation hygiene. Headline accuracy must never be
+  // reported from a synthetic-challenge dataset without a caveat — these cases
+  // measure bounded robustness behaviour, not real-world accuracy or
+  // calibration. The schema refuses to yield an uncaveated synthetic dataset:
+  // when the producer omitted `caveat`, the canonical refusal text is filled
+  // in so every downstream report quotes the caveat with its numbers.
+  .transform((d) =>
+    d.kind === "synthetic-challenge" && !d.caveat
+      ? { ...d, caveat: SYNTHETIC_CHALLENGE_CAVEAT }
+      : d,
+  );

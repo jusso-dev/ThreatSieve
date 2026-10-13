@@ -493,6 +493,21 @@ it("retains contradictory relationship assertions instead of overwriting their p
         .all()
     ).results,
   ).toHaveLength(2);
+  await expect(
+    a.intel.putRelationship({
+      ...base,
+      id: "rejected-assertion-history",
+      confidence: 2,
+    }),
+  ).rejects.toThrow();
+  expect(
+    await db
+      .prepare(
+        "SELECT COUNT(*) AS n FROM relationship_assertions WHERE relationship_id=?",
+      )
+      .bind("rejected-assertion-history")
+      .first(),
+  ).toEqual({ n: 0 });
 });
 it("finds shortest paths only within authorized graph edges", async () => {
   const { shortestPath, connectedNodes } =

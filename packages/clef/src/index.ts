@@ -16,6 +16,7 @@ import {
   type SourceReliability,
 } from "../../scoring/src/index";
 import { digest } from "../../intel/src/normalise";
+import { freshness } from "../../intel/src/freshness";
 
 export const SCHEMA_VERSION = "observable-v1";
 export const QUESTION_VERSION = "decisions-v1.1.0";
@@ -205,6 +206,73 @@ export const DEFAULT_THRESHOLDS: DecisionThresholds = {
   attackProbable: 0.7,
   attackWeak: 0.5,
 };
+
+/** Newest evidence must be at most this recent before "block" is recommendable. */
+export const FRESH_EVIDENCE_DAYS = 14;
+
+const DAY_MS = 86400000;
+
+export interface ActionGateResult {
+  actions: Assessment["recommended_actions"];
+  downgraded: boolean;
+}
+
+/**
+ * Fresh evidence required before recommending blocking. A `block` action is
+ * only kept when the newest evidence `observedAt` (an observation time, never
+ * processing time) is within {@link FRESH_EVIDENCE_DAYS} and the assessment
+ * is not awaiting review. Otherwise `block` is downgraded to `hunt` where
+ * behavioural evidence exists, or `monitor`, with reason code
+ * `FRESH_EVIDENCE_REQUIRED`. Historical malicious associations are retained —
+ * they just cannot justify a block recommendation on their own. Undated
+ * evidence never counts as fresh (fail-closed).
+ */
+export function freshEvidenceGate(
+  actions: Assessment["recommended_actions"],
+  evidence: { observedAt?: string; data?: Record<string, unknown> }[],
+  options: { awaitingReview: boolean; behaviour?: boolean; now?: string },
+): ActionGateResult {
+  const blockAt = actions.findIndex((x) => x.action === "block");
+  if (blockAt === -1) return { actions, downgraded: false };
+  const reference = Date.parse(options.now ?? new Date().toISOString());
+  const nowMs = Number.isNaN(reference) ? Date.now() : reference;
+  const newest = freshness(evidence, options.now).last_observed;
+  const fresh =
+    newest !== null &&
+    nowMs - Date.parse(newest) <= FRESH_EVIDENCE_DAYS * DAY_MS;
+  if (fresh && !options.awaitingReview) return { actions, downgraded: false };
+
+  const original = actions[blockAt]!;
+  const codes = [...original.reason_codes];
+  if (!codes.includes("FRESH_EVIDENCE_REQUIRED"))
+    codes.push("FRESH_EVIDENCE_REQUIRED");
+  const replacement = {
+    action: (options.behaviour ? "hunt" : "monitor") as "hunt" | "monitor",
+    confidence: original.confidence,
+    reason_codes: codes,
+  };
+  // The downgrade reason applies to the whole recommendation set.
+  const withCode = (
+    action: Assessment["recommended_actions"][number],
+  ): Assessment["recommended_actions"][number] =>
+    action.reason_codes.includes("FRESH_EVIDENCE_REQUIRED")
+      ? action
+      : { ...action, reason_codes: [...action.reason_codes, "FRESH_EVIDENCE_REQUIRED"] };
+  const next = actions.map((x, i) =>
+    i === blockAt ? replacement : withCode(x),
+  );
+  const duplicate = next.findIndex(
+    (x, i) => i !== blockAt && x.action === replacement.action,
+  );
+  if (duplicate !== -1) {
+    const merged = [...next[duplicate]!.reason_codes];
+    for (const c of codes) if (!merged.includes(c)) merged.push(c);
+    next[duplicate] = { ...next[duplicate]!, reason_codes: merged };
+    next.splice(blockAt, 1);
+  }
+  return { actions: next, downgraded: true };
+}
+
 export class ClefDecisionEngine {
   constructor(
     private transport: DecisionTransport,
@@ -408,8 +476,17 @@ export class ClefDecisionEngine {
               reason_codes: codes,
             },
           ];
+    // Fresh evidence required before recommending blocking: downgrades a
+    // `block` without evidence observed within FRESH_EVIDENCE_DAYS.
+    const gated = freshEvidenceGate(actions, bundle.evidence, {
+      awaitingReview: review.required,
+      behaviour: bundle.evidence.some((e) => e.behavioural),
+    });
+    if (gated.downgraded && !codes.includes("FRESH_EVIDENCE_REQUIRED"))
+      codes.push("FRESH_EVIDENCE_REQUIRED");
+    const recommended = gated.actions;
     if (codes.includes("CISA_KEV") && codes.includes("CUSTOMER_TECH_MATCH"))
-      actions.push({
+      recommended.push({
         action: "patch",
         confidence: scoring.confidence,
         reason_codes: ["CISA_KEV", "CUSTOMER_TECH_MATCH"],
@@ -451,7 +528,7 @@ export class ClefDecisionEngine {
           ),
         })),
       customer: relevance,
-      recommended_actions: actions,
+      recommended_actions: recommended,
       human_review: review.required,
       human_review_probability: review.probability,
       evidence: bundle.evidence,

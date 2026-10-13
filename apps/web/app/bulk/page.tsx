@@ -10,7 +10,18 @@ interface Job {
   id: string;
   status: string;
   pipeline_status: "running" | "failed" | "complete";
-  totals: { processed: number; rejected: number };
+  totals: {
+    processed: number;
+    rejected: number;
+    accepted?: number;
+    duplicates?: number;
+  };
+  processed?: number;
+  accepted?: number;
+  duplicates?: number;
+  rejected?: number;
+  errors?: { index: number; error: string }[];
+  assessments?: { id: string; label?: string }[];
   result: string | null;
   stages: { stage: string; status: string; count: number }[];
 }
@@ -218,11 +229,27 @@ export default function Bulk() {
           </div>
           <div className="detail-row">
             <span>Indicators processed</span>
-            <strong>{job.totals.processed.toLocaleString()}</strong>
+            <strong>
+              {(job.processed ?? job.totals.processed).toLocaleString()}
+            </strong>
           </div>
           <div className="detail-row">
-            <span>Invalid indicators</span>
-            <strong>{job.totals.rejected.toLocaleString()}</strong>
+            <span>Accepted</span>
+            <strong>
+              {(job.accepted ?? job.totals.accepted ?? 0).toLocaleString()}
+            </strong>
+          </div>
+          <div className="detail-row">
+            <span>Duplicates</span>
+            <strong>
+              {(job.duplicates ?? job.totals.duplicates ?? 0).toLocaleString()}
+            </strong>
+          </div>
+          <div className="detail-row">
+            <span>Rejected</span>
+            <strong>
+              {(job.rejected ?? job.totals.rejected).toLocaleString()}
+            </strong>
           </div>
           {job.stages.map((s) => (
             <div className="detail-row" key={s.stage + s.status}>
@@ -232,6 +259,62 @@ export default function Bulk() {
               <strong>{s.count.toLocaleString()}</strong>
             </div>
           ))}
+          {!!job.errors?.length && (
+            <div className="job-errors">
+              <h3>Line errors</h3>
+              <ul>
+                {job.errors.map((e) => (
+                  <li key={e.index + e.error}>
+                    Line {e.index + 1}: {e.error}
+                  </li>
+                ))}
+              </ul>
+            </div>
+          )}
+          {!!job.assessments?.length && (
+            <div className="job-results">
+              <h3>Results</h3>
+              <ul>
+                {job.assessments.map((a) => (
+                  <li key={a.id}>
+                    <a href={"/assessments/" + a.id}>
+                      {a.label ?? a.id}
+                    </a>
+                  </li>
+                ))}
+              </ul>
+            </div>
+          )}
+          {(job.pipeline_status === "failed" ||
+            job.stages.some((s) => s.status === "failed")) && (
+            <div className="modal-actions">
+              <Button
+                variant="outline"
+                disabled={!canWrite || busy}
+                onClick={() => {
+                  void (async () => {
+                    setBusy(true);
+                    setError("");
+                    try {
+                      await api("v1/jobs/" + job.id + "/replay", {
+                        method: "POST",
+                      });
+                      toast.success("Retry queued for failed stages.");
+                      setPollVersion((v) => v + 1);
+                    } catch (e) {
+                      setError(
+                        e instanceof Error ? e.message : "Retry failed",
+                      );
+                    } finally {
+                      setBusy(false);
+                    }
+                  })();
+                }}
+              >
+                Retry failed stages
+              </Button>
+            </div>
+          )}
           <p className="tooltip-note">
             Import completion and classification completion are tracked
             separately. Progress refreshes while jobs are running.
