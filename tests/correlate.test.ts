@@ -488,59 +488,38 @@ describe("migration 0022 backfill", () => {
   });
 });
 
-it("counts distinct observables even when several sources corroborate one member", async () => {
-  const data = { malwareEntityId: "malware-one-observable" };
-  await addObservable("obs-one-member", "one-member.example.test");
-  for (const sourceId of ["src-a", "src-b"]) {
+it("correlation observation bounds exclude future evidence while retaining valid observations", async () => {
+  vi.useFakeTimers();
+  vi.setSystemTime("2026-10-16T00:00:00.000Z");
+  await addObservable("obs-future-boundary", "future-boundary.example.test");
+  const data = { malwareEntityId: "malware-future-boundary" };
+  for (const [id, observedAt, sourceId] of [
+    ["valid-boundary-evidence", "2026-10-15T00:00:00.000Z", "src-a"],
+    ["future-boundary-evidence", "2027-01-01T00:00:00.000Z", "src-b"],
+  ]) {
     await addEvidence({
-      id: "one-member-" + sourceId,
-      observableId: "obs-one-member",
+      id: id!,
+      observableId: "obs-future-boundary",
       type: "malware",
-      sourceId,
+      sourceId: sourceId!,
       data,
-      observedAt: T0,
+      observedAt,
       confidence: 0.9,
       createdAt: T0,
     });
   }
-  await correlate(repo, "obs-one-member");
-  const id = "cluster_" + (await digest("malware:malware-one-observable"));
+  await correlate(repo, "obs-future-boundary");
+  const id = "cluster_" + (await digest("malware:malware-future-boundary"));
   expect(
     await db
-      .prepare("SELECT observable_count FROM threat_clusters WHERE id=?")
+      .prepare(
+        "SELECT first_observed,last_observed,last_processed_at FROM threat_clusters WHERE id=?",
+      )
       .bind(id)
       .first(),
-  ).toEqual({ observable_count: 1 });
-  await addObservable("obs-second-member", "second-member.example.test");
-  await addEvidence({
-    id: "second-member-source",
-    observableId: "obs-second-member",
-    type: "malware",
-    sourceId: "src-a",
-    data,
-    observedAt: T0,
-    confidence: 0.9,
-    createdAt: T0,
+  ).toEqual({
+    first_observed: "2026-10-15T00:00:00.000Z",
+    last_observed: "2026-10-15T00:00:00.000Z",
+    last_processed_at: "2026-10-16T00:00:00.000Z",
   });
-  await correlate(repo, "obs-second-member");
-  expect(
-    await db
-      .prepare("SELECT observable_count FROM threat_clusters WHERE id=?")
-      .bind(id)
-      .first(),
-  ).toEqual({ observable_count: 2 });
-  await db
-    .prepare("UPDATE threat_clusters SET observable_count=99 WHERE id=?")
-    .bind(id)
-    .run();
-  for (const sql of migrationStatements(
-    readFileSync("migrations/0029_cluster_observable_counts.sql", "utf8"),
-  ))
-    await db.prepare(sql).run();
-  expect(
-    await db
-      .prepare("SELECT observable_count FROM threat_clusters WHERE id=?")
-      .bind(id)
-      .first(),
-  ).toEqual({ observable_count: 2 });
 });

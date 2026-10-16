@@ -176,7 +176,7 @@ export async function correlate(repo: Repository, observableId: string) {
       ),
       repo.db
         .prepare(
-          "UPDATE threat_clusters SET observable_count=(SELECT COUNT(DISTINCT observable_id) FROM cluster_members WHERE cluster_id=?) WHERE id=?",
+          "UPDATE threat_clusters SET observable_count=(SELECT COUNT(*) FROM cluster_members WHERE cluster_id=?) WHERE id=?",
         )
         .bind(id, id),
     ]);

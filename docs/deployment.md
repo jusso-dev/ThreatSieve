@@ -40,7 +40,7 @@ Existing installations must apply all migrations through `0021_outbox_dispatch_t
 
 Migration `0027_cost_lookup_indexes.sql` adds indexes for normalized entity names and unfinished feed roots. Apply it before releasing the indexed alias lookup and bounded pending-job checks. Verify `EXPLAIN QUERY PLAN` for the feed finalization and outbox acknowledgement/cleanup queries; they must use the relevant indexes rather than scan historical jobs or deliveries.
 
-The efficacy sweep additionally requires migrations 0028–0030. Migration 0028 adds indexes for upstream identity searches, latest graph feedback, dossier change history and populated cluster browsing. Migration 0029 corrects historical observable counts using distinct member identifiers without deleting intelligence or evidence. Migration 0030 ensures observation-date and confidence updates reach subscriptions while collection/archive metadata alone does not create another change event. Record a Time Travel bookmark, inspect the SQL, and apply these as a separate database release step before the corresponding application release.
+The efficacy sweep additionally requires migrations 0028–0029. Migration 0028 adds indexes for upstream identity searches, latest graph feedback, dossier change history and populated cluster browsing. Migration 0029 ensures observation-date and confidence updates reach subscriptions while collection/archive metadata alone does not create another change event. Record a Time Travel bookmark, inspect the SQL, and apply these as a separate database release step before the corresponding application release.
 
 Refresh enabled optional feeds following release so previously stored observations reflect the corrected source-date policy.
 

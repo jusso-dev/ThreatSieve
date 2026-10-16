@@ -975,7 +975,7 @@ app.get("/v1/clusters/:id", scope("intel:read"), async (c) => {
     .first();
   if (!cluster) throw new AppError("NOT_FOUND", 404, "Cluster not found");
   const members = await c.env.DB.prepare(
-    "SELECT DISTINCT o.data FROM cluster_members m JOIN observables o ON o.id=m.observable_id WHERE m.cluster_id=? LIMIT 100",
+    "SELECT o.data FROM cluster_members m JOIN observables o ON o.id=m.observable_id WHERE m.cluster_id=? LIMIT 100",
   )
     .bind(c.req.param("id")!)
     .all<{ data: string }>();
