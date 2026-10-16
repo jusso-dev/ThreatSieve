@@ -122,8 +122,22 @@ export async function buildDemoSeed() {
     );
     insert(
       "entity_sources",
-      ["entity_id", "source_id", "source_record_id", "provenance"],
-      [e.id, "demo", e.id, JSON.stringify(p)],
+      [
+        "entity_id",
+        "source_id",
+        "source_record_id",
+        "provenance",
+        "record_namespace",
+        "original_source_id",
+      ],
+      [
+        e.id,
+        e.provenance.sourceId,
+        e.provenance.sourceRecordId ?? e.id,
+        JSON.stringify(e.provenance),
+        e.provenance.sourceRecordNamespace ?? e.provenance.sourceId,
+        e.provenance.originalSourceId ?? e.provenance.sourceId,
+      ],
     );
     insert(
       "entity_aliases",

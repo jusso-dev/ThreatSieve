@@ -192,6 +192,10 @@ export class AdditionalFeed extends PublicFeed {
       const existing = matches.length === 1 ? matches[0] : undefined;
       const id = existing?.id ?? (await entityId(type, item.value));
       p.sourceRecordId = item.uuid;
+      p.sourceRecordNamespace = "misp-galaxy:" + item.collection;
+      p.originalSourceId = item.collection.startsWith("mitre-")
+        ? "mitre"
+        : "misp";
       p.license = item.license ?? "Collection-specific terms";
       p.sourceUrl =
         "https://github.com/MISP/misp-galaxy/blob/main/clusters/" +

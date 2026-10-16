@@ -93,7 +93,21 @@ export async function stixRecord(
 ): Promise<NormalizedIntelRecord[]> {
   const o = StixObject.parse(raw);
   if (o.revoked || o.x_mitre_deprecated) return [];
-  p = { ...p, sourceRecordId: o.id, publishedAt: o.modified ?? o.created };
+  p = {
+    ...p,
+    sourceRecordId: o.id,
+    sourceRecordNamespace:
+      /^[a-z0-9-]+--[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(
+        o.id,
+      )
+        ? "stix"
+        : (p.sourceRecordNamespace ?? p.sourceId),
+    originalSourceId:
+      typeof o.created_by_ref === "string"
+        ? o.created_by_ref
+        : p.originalSourceId,
+    publishedAt: o.modified ?? o.created,
+  };
   const records: NormalizedIntelRecord[] = [];
   if (
     o.type === "relationship" &&

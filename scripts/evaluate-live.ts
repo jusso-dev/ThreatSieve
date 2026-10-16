@@ -159,6 +159,35 @@ async function main() {
       {
         dataset_hash: hash,
         dataset_kind: dataset.kind,
+        sampling: dataset.sampling,
+        coverage: dataset.cases.map((c) => ({
+          id: c.id,
+          category: c.category,
+          labelled: c.label !== null,
+          sources: [...new Set(c.bundle.evidence.map((e) => e.sourceId))],
+        })),
+        measurement: {
+          calls: records.length,
+          provider_cost: null,
+          provider_cost_notice:
+            "Reconcile provider billing for this run; no estimated cost is presented as a measurement.",
+          latency_by_model: [FLASH, FULL].map((model) => {
+            const times = records
+              .filter((r) => r.model === model)
+              .map((r) => r.duration_ms)
+              .sort((a, b) => a - b);
+            return {
+              model,
+              calls: times.length,
+              total_ms: times.reduce((a, b) => a + b, 0),
+              p50_ms: times[Math.floor(times.length * 0.5)] ?? null,
+              p95_ms:
+                times[
+                  Math.min(times.length - 1, Math.floor(times.length * 0.95))
+                ] ?? null,
+            };
+          }),
+        },
         schema_version: SCHEMA_VERSION,
         question_version: QUESTION_VERSION,
         metrics,

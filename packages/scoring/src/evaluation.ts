@@ -5,6 +5,22 @@ export interface LabelledPrediction {
   probability: number;
   humanReview: boolean;
 }
+/** Wilson score interval, 95%, conditional on independent labelled cases. */
+export function wilsonInterval(successes: number, total: number) {
+  if (!total) return null;
+  const z = 1.959963984540054,
+    p = successes / total;
+  const denominator = 1 + (z * z) / total;
+  const centre = (p + (z * z) / (2 * total)) / denominator;
+  const margin =
+    (z * Math.sqrt((p * (1 - p)) / total + (z * z) / (4 * total * total))) /
+    denominator;
+  return {
+    lower: Math.max(0, centre - margin),
+    upper: Math.min(1, centre + margin),
+    cases: total,
+  };
+}
 export function evaluate(predictions: LabelledPrediction[], threshold = 0.5) {
   let tp = 0,
     tn = 0,
@@ -36,6 +52,12 @@ export function evaluate(predictions: LabelledPrediction[], threshold = 0.5) {
   const ratio = (n: number, d: number) => (d ? n / d : null);
   return {
     cases: predictions.length,
+    uncertainty: {
+      method: "95% Wilson; assumes independent representative labels",
+      precision: wilsonInterval(tp, tp + fp),
+      recall: wilsonInterval(tp, tp + fn),
+      false_positive_rate: wilsonInterval(fp, fp + tn),
+    },
     precision: ratio(tp, tp + fp),
     recall: ratio(tp, tp + fn),
     false_positive_rate: ratio(fp, fp + tn),

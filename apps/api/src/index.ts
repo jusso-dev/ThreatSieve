@@ -492,7 +492,7 @@ app.get("/v1/jobs/:id", scope("assessment:read"), async (c) => {
     (row) => row.status === "queued" || row.status === "running",
   );
   const failed = counts.results.some((row) => row.status === "failed");
-  // Cumulative diagnostics live on each bulk page result (payload-carried).
+  // Cumulative diagnostics are snapshots of durable per-input outcomes.
   // Pick the furthest page by processed — do not SUM cumulative pages.
   const bulkRows = await c.env.DB.prepare(
     "SELECT result FROM pipeline_jobs WHERE tenant_id=? AND stage='bulk' AND (json_extract(data,'$.payload.bulkId')=? OR json_extract(data,'$.payload.rootId')=? OR id=?)",
@@ -1412,7 +1412,10 @@ export default {
         }
         await recoverExpiredJobs(env.DB);
         await scheduleOperations(env.DB);
-        await dispatchOutbox(env);
+        // A full round means more may be waiting; drain a bounded amount per
+        // tick (each round stays within the 100-message sendBatch limit).
+        for (let round = 0; round < 10; round++)
+          if ((await dispatchOutbox(env)) < 100) break;
         await finalizeFeeds(env);
         await env.DB.prepare("DELETE FROM rate_limits WHERE expires_at<?")
           .bind(Math.floor(Date.now() / 60000))

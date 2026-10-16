@@ -406,7 +406,25 @@ describe("migration 0022 backfill", () => {
           "INSERT INTO sources(id,name,independent_group,reliability,license) VALUES('src-a','Source A','independent',1,'test')",
         )
         .run();
-      const lrepo = new Repository(ldb);
+      // Seed the historical schema with its historical source assertion format.
+      const lrepo = new (class extends Repository {
+        override sourceStatements(
+          e: Parameters<Repository["sourceStatements"]>[0],
+        ) {
+          return [
+            this.db
+              .prepare(
+                "INSERT OR IGNORE INTO entity_sources(entity_id,source_id,source_record_id,provenance) VALUES(?,?,?,?)",
+              )
+              .bind(
+                e.id,
+                e.provenance.sourceId,
+                e.provenance.sourceRecordId ?? e.id,
+                JSON.stringify(e.provenance),
+              ),
+          ];
+        }
+      })(ldb);
       await lrepo.putObservable(
         {
           id: "obs-legacy",

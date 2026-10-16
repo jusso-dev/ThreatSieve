@@ -12,13 +12,88 @@ const required = new Set([
   "feodo",
   "cisa-kev",
 ]);
+type JobRow = OperationalReport["jobs"][number];
+/** A stage with pending work and no completion or claim this recently is stalled. */
+export const PIPELINE_STALL_MS = 15 * 60000;
+/** One feed cycle (the six-hourly feed sync cron): a backlog older than this is not draining fast enough. */
+export const PIPELINE_BACKLOG_MAX_MS = 6 * 3600000;
+const OUTBOX_STALL_MS = 10 * 60000;
+/**
+ * Pipeline job summary SQL for the operations report, one statement per scope.
+ *
+ * pipeline_jobs is append-only, so the old single-predicate form
+ * `(tenant_id=? OR tenant_id IS NULL) AND (status!='complete' OR updated_at>=?)`
+ * could not seek on `jobs_operational_scope` and read every global job ever
+ * created. Each compound term here is an equality or range seek on
+ * (tenant_id,status,updated_at), so the rows read track live work rather than
+ * table history. D1 allows at most five compound terms, hence two statements.
+ */
+const jobsSql = (scope: string, since: string) =>
+  "SELECT stage,status,COUNT(*) AS count,MIN(created_at) AS oldest,MAX(updated_at) AS latest,SUM(CASE WHEN result IS NOT NULL AND status!='complete' THEN 1 ELSE 0 END) AS stale_result_count FROM (" +
+  [
+    ...["queued", "running", "failed"].map(
+      (status) =>
+        `SELECT stage,status,created_at,updated_at,result FROM pipeline_jobs WHERE ${scope} AND status='${status}'`,
+    ),
+    `SELECT stage,status,created_at,updated_at,result FROM pipeline_jobs WHERE ${scope} AND status='complete' AND updated_at>=${since}`,
+  ].join(" UNION ALL ") +
+  ") GROUP BY stage,status";
+/** Binds (tenant, since). */
+export const TENANT_JOBS_SQL = jobsSql("tenant_id=?1", "?2");
+/** Binds (since). */
+export const GLOBAL_JOBS_SQL = jobsSql("tenant_id IS NULL", "?1");
+export async function operationalJobs(
+  db: D1Database,
+  tenant: string,
+  since: string,
+): Promise<JobRow[]> {
+  const [own, global] = await Promise.all([
+    db.prepare(TENANT_JOBS_SQL).bind(tenant, since).all<JobRow>(),
+    db.prepare(GLOBAL_JOBS_SQL).bind(since).all<JobRow>(),
+  ]);
+  const merged = new Map<string, JobRow>();
+  for (const row of [...own.results, ...global.results]) {
+    const key = row.stage + "\u0000" + row.status,
+      prev = merged.get(key);
+    merged.set(
+      key,
+      prev
+        ? {
+            ...prev,
+            count: prev.count + row.count,
+            oldest:
+              prev.oldest && row.oldest
+                ? prev.oldest < row.oldest
+                  ? prev.oldest
+                  : row.oldest
+                : (prev.oldest ?? row.oldest),
+            latest:
+              prev.latest && row.latest
+                ? prev.latest > row.latest
+                  ? prev.latest
+                  : row.latest
+                : (prev.latest ?? row.latest),
+            stale_result_count:
+              prev.stale_result_count + row.stale_result_count,
+          }
+        : { ...row },
+    );
+  }
+  return [...merged.values()].sort(
+    (a, b) =>
+      (a.stage < b.stage ? -1 : a.stage > b.stage ? 1 : 0) ||
+      (a.status < b.status ? -1 : a.status > b.status ? 1 : 0),
+  );
+}
 export function operationalAlerts(
   report: Omit<OperationalReport, "alerts" | "status">,
   now = Date.now(),
 ): OperationalAlert[] {
   const alerts: OperationalAlert[] = [];
-  const age = (at: string | null) =>
-    at ? Math.max(0, now - Date.parse(at)) : Infinity;
+  const age = (at: string | null) => {
+    const parsed = at ? Date.parse(at) : NaN;
+    return Number.isFinite(parsed) && parsed <= now ? now - parsed : Infinity;
+  };
   const add = (
     code: string,
     severity: OperationalAlert["severity"],
@@ -80,6 +155,20 @@ export function operationalAlerts(
         "Source records were quarantined; inspect rejection details.",
       );
   }
+  // Progress per stage: the latest completion, or the latest claim of running
+  // work. A post-sync backlog that keeps progressing is draining, not stalled.
+  const lastProgress = new Map<string, number>();
+  for (const j of report.jobs)
+    if ((j.status === "complete" || j.status === "running") && j.latest) {
+      const at = Date.parse(j.latest);
+      if (
+        Number.isFinite(at) &&
+        at <= now &&
+        at > (lastProgress.get(j.stage) ?? -Infinity)
+      )
+        lastProgress.set(j.stage, at);
+    }
+  const lagging = new Map<string, number>();
   for (const j of report.jobs) {
     if (j.stale_result_count)
       add(
@@ -99,20 +188,54 @@ export function operationalAlerts(
       ["queued", "running"].includes(j.status) &&
       age(j.oldest) > 15 * 60000
     )
+      lagging.set(j.stage, Math.max(lagging.get(j.stage) ?? 0, age(j.oldest)));
+  }
+  // One lag alert per stage, even when both queued and running rows lag.
+  for (const [stage, oldest] of lagging) {
+    const progress = lastProgress.get(stage);
+    if (progress === undefined || now - progress > PIPELINE_STALL_MS)
       add(
         "PIPELINE_LAG",
         "critical",
-        j.stage,
-        "Pending work is older than 15 minutes.",
+        stage,
+        "Pending work is older than 15 minutes and the stage has made no progress in 15 minutes.",
+      );
+    else if (oldest > PIPELINE_BACKLOG_MAX_MS)
+      add(
+        "PIPELINE_LAG",
+        "critical",
+        stage,
+        "Backlog has not drained within one feed cycle.",
+      );
+    else
+      add(
+        "PIPELINE_BACKLOG",
+        "warning",
+        stage,
+        "Backlog is draining after a feed sync.",
       );
   }
-  if (report.outbox.pending && age(report.outbox.oldest) > 10 * 60000)
-    add(
-      "OUTBOX_LAG",
-      "critical",
-      "outbox",
-      "Unpublished work has waited longer than 10 minutes.",
-    );
+  if (report.outbox.pending && age(report.outbox.oldest) > OUTBOX_STALL_MS) {
+    if (
+      age(report.outbox.last_dispatch) > OUTBOX_STALL_MS ||
+      age(report.outbox.oldest) > PIPELINE_BACKLOG_MAX_MS
+    )
+      add(
+        "OUTBOX_LAG",
+        "critical",
+        "outbox",
+        age(report.outbox.oldest) > PIPELINE_BACKLOG_MAX_MS
+          ? "Unpublished backlog has not drained within one feed cycle."
+          : "Unpublished work has waited longer than 10 minutes and nothing was published in 10 minutes.",
+      );
+    else
+      add(
+        "OUTBOX_BACKLOG",
+        "warning",
+        "outbox",
+        "Unpublished work is waiting but the outbox is still publishing.",
+      );
+  }
   if (report.usage.calls >= report.usage.daily_limit * 0.8)
     add(
       "CLASSIFICATION_BUDGET",
@@ -145,36 +268,45 @@ export async function operationalReport(
   const now = new Date(),
     since = new Date(now.getTime() - 86400000).toISOString(),
     day = now.toISOString().slice(0, 10);
-  const [heartbeat, archive, feeds, jobs, outbox, usage, integrations] =
-    await Promise.all([
-      env.DB.prepare(
-        "SELECT updated_at FROM operational_heartbeats WHERE name='pipeline'",
-      ).first<{ updated_at: string }>(),
-      env.ARCHIVE.head("ops/pipeline-heartbeat.json"),
-      env.DB.prepare(
-        "SELECT id,name,status,enabled,last_sync,next_sync,records_processed,records_added,records_updated,errors FROM sources WHERE id NOT IN ('customer','analyst','upload','demo') ORDER BY id",
-      ).all<Omit<OperationalReport["feeds"][number], "configured">>(),
-      env.DB.prepare(
-        "SELECT stage,status,COUNT(*) AS count,MIN(created_at) AS oldest,SUM(CASE WHEN result IS NOT NULL AND status!='complete' THEN 1 ELSE 0 END) AS stale_result_count FROM pipeline_jobs WHERE (tenant_id=? OR tenant_id IS NULL) AND (status!='complete' OR updated_at>=?) GROUP BY stage,status ORDER BY stage,status",
-      )
-        .bind(tenant, since)
-        .all<OperationalReport["jobs"][number]>(),
-      env.DB.prepare(
-        "SELECT COUNT(*) AS pending,MIN(o.created_at) AS oldest FROM outbox o JOIN pipeline_jobs p ON p.id=o.id WHERE o.dispatched_at IS NULL AND (p.tenant_id=? OR p.tenant_id IS NULL)",
-      )
-        .bind(tenant)
-        .first<{ pending: number; oldest: string | null }>(),
-      env.DB.prepare(
-        "SELECT COALESCE((SELECT count FROM inference_budget WHERE tenant_id=? AND day=?),0) AS calls,COALESCE((SELECT SUM(input_tokens) FROM classification_runs WHERE tenant_id=? AND created_at>=?),0) AS input_tokens",
-      )
-        .bind(tenant, day, tenant, day)
-        .first<{ calls: number; input_tokens: number }>(),
-      env.DB.prepare(
-        "SELECT connector_id,last_poll_at,last_success_at,status,error_type,version FROM integration_heartbeats WHERE tenant_id=? ORDER BY connector_id LIMIT 100",
-      )
-        .bind(tenant)
-        .all<OperationalReport["integrations"][number]>(),
-    ]);
+  const [
+    heartbeat,
+    archive,
+    feeds,
+    jobs,
+    outbox,
+    dispatched,
+    usage,
+    integrations,
+  ] = await Promise.all([
+    env.DB.prepare(
+      "SELECT updated_at FROM operational_heartbeats WHERE name='pipeline'",
+    ).first<{ updated_at: string }>(),
+    env.ARCHIVE.head("ops/pipeline-heartbeat.json"),
+    env.DB.prepare(
+      "SELECT id,name,status,enabled,last_sync,next_sync,records_processed,records_added,records_updated,errors FROM sources WHERE id NOT IN ('customer','analyst','upload','demo') ORDER BY id",
+    ).all<Omit<OperationalReport["feeds"][number], "configured">>(),
+    operationalJobs(env.DB, tenant, since),
+    env.DB.prepare(
+      "SELECT COUNT(*) AS pending,MIN(o.created_at) AS oldest FROM outbox o JOIN pipeline_jobs p ON p.id=o.id WHERE o.dispatched_at IS NULL AND (p.tenant_id=? OR p.tenant_id IS NULL)",
+    )
+      .bind(tenant)
+      .first<{ pending: number; oldest: string | null }>(),
+    env.DB.prepare(
+      "SELECT MAX(o.dispatched_at) AS last_dispatch FROM outbox o JOIN pipeline_jobs p ON p.id=o.id WHERE o.dispatched_at>=? AND (p.tenant_id=? OR p.tenant_id IS NULL)",
+    )
+      .bind(new Date(now.getTime() - OUTBOX_STALL_MS).toISOString(), tenant)
+      .first<{ last_dispatch: string | null }>(),
+    env.DB.prepare(
+      "SELECT COALESCE((SELECT count FROM inference_budget WHERE tenant_id=? AND day=?),0) AS calls,COALESCE((SELECT SUM(input_tokens) FROM classification_runs WHERE tenant_id=? AND created_at>=?),0) AS input_tokens",
+    )
+      .bind(tenant, day, tenant, day)
+      .first<{ calls: number; input_tokens: number }>(),
+    env.DB.prepare(
+      "SELECT connector_id,last_poll_at,last_success_at,status,error_type,version FROM integration_heartbeats WHERE tenant_id=? ORDER BY connector_id LIMIT 100",
+    )
+      .bind(tenant)
+      .all<OperationalReport["integrations"][number]>(),
+  ]);
   const configured = await Promise.all(
     feeds.results.map(async (f) => {
       let available = false;
@@ -193,8 +325,12 @@ export async function operationalReport(
     heartbeat: heartbeat?.updated_at ?? null,
     archive_heartbeat: archive?.uploaded.toISOString() ?? null,
     feeds: configured,
-    jobs: jobs.results,
-    outbox: outbox ?? { pending: 0, oldest: null },
+    jobs,
+    outbox: {
+      pending: outbox?.pending ?? 0,
+      oldest: outbox?.oldest ?? null,
+      last_dispatch: dispatched?.last_dispatch ?? null,
+    },
     usage: {
       calls: usage?.calls ?? 0,
       input_tokens: usage?.input_tokens ?? 0,

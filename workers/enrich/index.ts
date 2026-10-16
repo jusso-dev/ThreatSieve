@@ -3,6 +3,7 @@ import type { AppEnv } from "../../apps/api/src/env";
 import { EntitySchema } from "../../packages/schemas/src/index";
 import { Repository } from "../../packages/database/src/repository";
 import { digest } from "../../packages/intel/src/normalise";
+import { AppError } from "../../packages/observability/src/index";
 const MODEL = "@cf/baai/bge-base-en-v1.5";
 /** One bounded provider request and one D1 commit for an embedding batch. */
 export async function indexEntities(env: AppEnv, entityIds: string[]) {
@@ -39,30 +40,52 @@ export async function indexEntities(env: AppEnv, entityIds: string[]) {
   const cached = prepared.filter((r) => r.text && r.cached),
     pending = prepared.filter((r) => r.text && !r.cached);
   if (pending.length) {
-    const output = await env.AI.run(MODEL, {
-      text: pending.map((r) => r.text),
-    });
-    const vectors = z
+    let output;
+    try {
+      output = await env.AI.run(MODEL, { text: pending.map((r) => r.text) });
+    } catch {
+      throw new AppError(
+        "EMBEDDING_PROVIDER_FAILED",
+        502,
+        "Embedding provider request failed",
+      );
+    }
+    const parsed = z
       .object({
         data: z
           .array(z.array(z.number().finite()).length(768))
           .length(pending.length),
       })
-      .parse(output).data;
-    await env.VECTOR_INDEX.upsert(
-      await Promise.all(
-        pending.map(async (r, i) => ({
-          id: await digest(r.entity.id),
-          values: vectors[i]!,
-          metadata: {
-            entityType: r.entity.type,
-            entityId: r.entity.id,
-            source: r.entity.provenance.sourceId,
-            version: r.version,
-          },
-        })),
-      ),
-    );
+      .safeParse(output);
+    if (!parsed.success)
+      throw new AppError(
+        "EMBEDDING_RESPONSE_INVALID",
+        502,
+        "Embedding response shape invalid",
+      );
+    const vectors = parsed.data.data;
+    try {
+      await env.VECTOR_INDEX.upsert(
+        await Promise.all(
+          pending.map(async (r, i) => ({
+            id: await digest(r.entity.id),
+            values: vectors[i]!,
+            metadata: {
+              entityType: r.entity.type,
+              entityId: r.entity.id,
+              source: r.entity.provenance.sourceId,
+              version: r.version,
+            },
+          })),
+        ),
+      );
+    } catch {
+      throw new AppError(
+        "VECTOR_INDEX_WRITE_FAILED",
+        502,
+        "Vector index write failed",
+      );
+    }
     const now = new Date().toISOString();
     await env.DB.batch(
       pending.map((r) =>

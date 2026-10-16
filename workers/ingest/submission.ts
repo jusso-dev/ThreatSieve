@@ -3,6 +3,11 @@ import { Repository } from "../../packages/database/src/repository";
 import { canonicalJson, digest } from "../../packages/intel/src/normalise";
 import { AppError } from "../../packages/observability/src/index";
 import { makeJob } from "./pipeline";
+import {
+  BULK_ARCHIVE_PAGE_SIZE,
+  partitionArchive,
+  archivePageKey,
+} from "../../packages/intel/src/archive-pages";
 interface UploadArchive {
   put(key: string, body: string): Promise<unknown>;
   delete(key: string): Promise<void>;
@@ -46,11 +51,26 @@ export async function submitBulk(
     "bulk",
     key,
     p.tenantId,
-    { key, total: inputs.length },
+    { key, total: inputs.length, partitioned: true },
     correlationId,
   );
   job.payload.bulkId = job.jobId;
-  await archive.put(key, JSON.stringify(inputs));
+  const cleanup = async () => {
+    await archive.delete(key);
+    for (
+      let offset = 0;
+      offset < Math.max(1, inputs.length);
+      offset += BULK_ARCHIVE_PAGE_SIZE
+    )
+      await archive.delete(archivePageKey(key, offset));
+  };
+  try {
+    await archive.put(key, JSON.stringify(inputs));
+    await partitionArchive(archive, key, inputs, BULK_ARCHIVE_PAGE_SIZE);
+  } catch (error) {
+    await cleanup();
+    throw error;
+  }
   try {
     const statements = requestKey
       ? [
@@ -82,17 +102,17 @@ export async function submitBulk(
     );
     await db.batch(statements);
   } catch (error) {
-    await archive.delete(key);
+    await cleanup();
     throw error;
   }
   let winner;
   try {
     winner = await replay();
   } catch (error) {
-    await archive.delete(key);
+    await cleanup();
     throw error;
   }
-  if (winner && winner.job_id !== job.jobId) await archive.delete(key);
+  if (winner && winner.job_id !== job.jobId) await cleanup();
   return {
     job_id: winner?.job_id ?? job.jobId,
     submitted: inputs.length,

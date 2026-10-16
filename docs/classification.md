@@ -15,3 +15,10 @@ Flash escalates if the combined confidence falls below 0.90 or review probabilit
 `classification_runs` retain model, available model version, schema version, question-set version, evidence version, candidate set, raw response, input tokens and duration. Versions unavailable from Cloudflare are left absent rather than invented. Cache keys include tenant, observable, evidence version, schema/question versions and model. Evidence hashes include the UTC day to reevaluate stale intelligence.
 
 Evaluation separates maliciousness and actor decisions. Metrics: precision, recall, FPR, FNR, Brier score, ten-bin expected calibration error and human escalation rate. A denominator with no applicable cases returns null. Labelled cases include benign infrastructure, C2, phishing, scanners, ambiguous evidence and adversarial report instructions. Offline fixtures exercise the evaluator; actual model releases require saved measured predictions on a representative held-out dataset.
+
+Analyst-labelled datasets must document their sampled population, sampling method,
+exclusions and held-out status in `sampling`. Reports include 95% Wilson intervals
+for precision, recall and FPR, conditional on independent representative labels,
+plus per-case source/category coverage and measured latency per model. Provider
+cost stays null until reconciled with billing. These intervals do not establish
+representativeness or calibrated probabilities. See [remaining live acceptance](issue-remediation.md).

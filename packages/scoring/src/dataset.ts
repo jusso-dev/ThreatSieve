@@ -65,9 +65,23 @@ export const EvaluationDataset = z
     // leaf-1.2.3 additive: a dataset that reaches a report must carry its own
     // caveat. Producers may supply one; see the transform below.
     caveat: z.string().trim().min(10).optional(),
+    sampling: z
+      .object({
+        population: z.string().min(10),
+        method: z.string().min(10),
+        exclusions: z.string().min(10),
+        heldOut: z.literal(true),
+      })
+      .optional(),
     cases: z.array(EvaluationCase).min(1).max(100),
   })
   .superRefine((d, ctx) => {
+    if (d.kind === "analyst-labelled" && !d.sampling)
+      ctx.addIssue({
+        code: "custom",
+        message:
+          "Analyst evaluation requires documented sampling, exclusions and a held-out dataset",
+      });
     if (new Set(d.cases.map((c) => c.id)).size !== d.cases.length)
       ctx.addIssue({ code: "custom", message: "Case IDs must be unique" });
   })

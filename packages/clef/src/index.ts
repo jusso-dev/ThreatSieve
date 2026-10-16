@@ -19,7 +19,7 @@ import { digest } from "../../intel/src/normalise";
 import { freshness } from "../../intel/src/freshness";
 
 export const SCHEMA_VERSION = "observable-v1";
-export const QUESTION_VERSION = "decisions-v1.1.1";
+export const QUESTION_VERSION = "decisions-v1.1.2";
 export const FLASH = "@cf/cloudflare/clef-flash";
 export const FULL = "@cf/cloudflare/clef";
 export type Model = typeof FLASH | typeof FULL;

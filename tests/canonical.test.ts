@@ -83,6 +83,8 @@ function campaign(
       sourceId,
       sourceName,
       sourceRecordId,
+      sourceRecordNamespace: "test-shared-origin",
+      originalSourceId: "test-shared-origin",
       retrievedAt: now,
       redistributable: true,
     },
@@ -189,6 +191,8 @@ describe("mirrored source assertions (pure)", () => {
         sourceId: "mitre",
         sourceName: "MITRE",
         sourceRecordId: upstream,
+        sourceRecordNamespace: "mitre",
+        originalSourceId: "mitre",
         retrievedAt: "2026-01-01T00:00:00.000Z",
         redistributable: true,
       },
@@ -196,6 +200,8 @@ describe("mirrored source assertions (pure)", () => {
         sourceId: "taxii",
         sourceName: "TAXII",
         sourceRecordId: upstream,
+        sourceRecordNamespace: "mitre",
+        originalSourceId: "mitre",
         retrievedAt: "2026-01-01T00:00:00.000Z",
         redistributable: true,
       },
@@ -203,6 +209,8 @@ describe("mirrored source assertions (pure)", () => {
         sourceId: "misp",
         sourceName: "MISP",
         sourceRecordId: upstream,
+        sourceRecordNamespace: "mitre",
+        originalSourceId: "mitre",
         retrievedAt: "2026-01-01T00:00:00.000Z",
         redistributable: true,
       },
@@ -230,6 +238,8 @@ describe("mirrored source assertions (pure)", () => {
         sourceId: "taxii",
         sourceName: "TAXII",
         sourceRecordId: "shared-mirror-upstream",
+        sourceRecordNamespace: "original",
+        originalSourceId: "original",
         retrievedAt: "2026-01-01T00:00:00.000Z",
         redistributable: true,
       },
@@ -237,6 +247,8 @@ describe("mirrored source assertions (pure)", () => {
         sourceId: "misp",
         sourceName: "MISP",
         sourceRecordId: "shared-mirror-upstream",
+        sourceRecordNamespace: "original",
+        originalSourceId: "original",
         retrievedAt: "2026-01-01T00:00:00.000Z",
         redistributable: true,
       },
@@ -589,6 +601,7 @@ describe("tenant visibility: private peers must not leak", () => {
         sourceId: "mitre",
         sourceName: "MITRE ATT&CK",
         sourceRecordId: sharedExternal,
+        sourceRecordNamespace: "shared-campaign-origin",
         retrievedAt: now,
         redistributable: true,
       },
@@ -605,6 +618,7 @@ describe("tenant visibility: private peers must not leak", () => {
         sourceId: "upload",
         sourceName: "Tenant B Secret Feed",
         sourceRecordId: sharedExternal + "-b",
+        sourceRecordNamespace: "shared-campaign-origin",
         retrievedAt: now,
         redistributable: false,
       },
@@ -670,4 +684,51 @@ describe("tenant visibility: private peers must not leak", () => {
       await canonicalEntities(repo, "tenant-a-vis", privateCamp.id),
     ).toBeNull();
   });
+});
+
+it("equal IDs and external IDs from unrelated providers do not merge campaigns", async () => {
+  const a = campaign("provider-a-campaign", "mitre", "Provider A", "42");
+  const b = campaign("provider-b-campaign", "taxii", "Provider B", "42");
+  a.externalId = b.externalId = "provider-local-42";
+  delete a.provenance.sourceRecordNamespace;
+  delete b.provenance.sourceRecordNamespace;
+  delete a.provenance.originalSourceId;
+  delete b.provenance.originalSourceId;
+  await repo.putEntity(a);
+  await repo.putEntity(b);
+  expect(
+    (await identityGroup(repo, principal.tenantId, a.id))?.memberIds,
+  ).toEqual([a.id]);
+  expect(
+    (await identityGroup(repo, principal.tenantId, b.id))?.memberIds,
+  ).toEqual([b.id]);
+});
+
+it("excluded source policies remove corroboration assertions from canonical views", async () => {
+  const a = campaign("policy-campaign", "mitre", "Provider A", "policy-id");
+  await repo.putEntity(a);
+  await repo.attachSource(a.id, {
+    ...a,
+    provenance: {
+      ...a.provenance,
+      sourceId: "taxii",
+      sourceName: "Provider B",
+      sourceRecordId: "other-policy-id",
+      originalSourceId: "other-origin",
+      sourceRecordNamespace: "other-origin",
+    },
+  });
+  const before = await canonicalEntities(repo, principal.tenantId, a.id);
+  expect(before!.source_assertions.map((p) => p.sourceId)).toContain("taxii");
+  await db
+    .prepare(
+      "INSERT INTO tenant_source_policy(tenant_id,source_id,enabled,reason,updated_at) VALUES(?,?,0,'test exclusion','2026-10-16T00:00:00.000Z') ON CONFLICT(tenant_id,source_id) DO UPDATE SET enabled=0",
+    )
+    .bind(principal.tenantId, "taxii")
+    .run();
+  const after = await canonicalEntities(repo, principal.tenantId, a.id);
+  expect(after!.source_assertions.map((p) => p.sourceId)).not.toContain(
+    "taxii",
+  );
+  expect(after!.independent_corroboration_count).toBe(1);
 });
