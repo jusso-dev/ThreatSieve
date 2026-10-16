@@ -48,7 +48,7 @@ export function scoreDossier(
     ),
   );
   const recent = evidence.filter((e) => {
-    const d = Date.parse(e.observedAt ?? e.createdAt);
+    const d = Date.parse(e.observedAt ?? "");
     return Number.isFinite(d) && d <= now && now - d < 30 * 86400000;
   });
   const sightings = evidence.filter(

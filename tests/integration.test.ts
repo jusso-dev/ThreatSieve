@@ -75,6 +75,79 @@ beforeAll(async () => {
 afterAll(async () => {
   await mf?.dispose();
 });
+
+it("marks graph and candidate budgets as incomplete instead of silently omitting intelligence", async () => {
+  for (const [kind, count] of [
+    ["malware", 40],
+    ["threat-actor", 12],
+  ] as const) {
+    const observable = await normalise("truncation-" + kind + ".example");
+    await repo.putObservable(observable, provenance);
+    const now = new Date().toISOString();
+    for (let i = 0; i < count; i++) {
+      const id = "truncation-" + kind + "-" + i;
+      await repo.putEntity({
+        id,
+        type: kind,
+        name: id,
+        aliases: [],
+        description: "Synthetic graph budget test",
+        data: {},
+        provenance,
+      });
+      await repo.putRelationship({
+        id: "relation-" + id,
+        sourceEntityId: observable.id,
+        targetEntityId: id,
+        relationshipType: "INDICATES",
+        assertionType: "source_claimed",
+        confidence: 0.8,
+        sourceIds: ["mitre"],
+        provenance,
+        createdAt: now,
+        updatedAt: now,
+      });
+    }
+    const bundle = await buildEvidenceBundle(repo, "tenant-a", observable.id);
+    expect(bundle.truncated).toBe(true);
+    if (kind === "threat-actor")
+      expect(bundle.actorCandidates).toHaveLength(10);
+  }
+});
+
+it("changes the assessment cache version when evidence becomes truncated", async () => {
+  const observable = await normalise("truncated-cache.example");
+  await repo.putObservable(observable, provenance);
+  const now = new Date().toISOString();
+  const records: Evidence[] = Array.from({ length: 101 }, (_, i) => ({
+    id: "cache-truncation-evidence-" + i,
+    sourceId: "mitre",
+    type: "feed",
+    confidence: 0.8,
+    behavioural: false,
+    data: { malicious: true },
+    provenance,
+    observedAt: now,
+    createdAt: now,
+  }));
+  const evidence = vi.spyOn(repo, "evidence");
+  try {
+    evidence.mockResolvedValue(records.slice(0, 100));
+    const complete = await buildEvidenceBundle(repo, "tenant-a", observable.id);
+    evidence.mockResolvedValue([...records]);
+    const incomplete = await buildEvidenceBundle(
+      repo,
+      "tenant-a",
+      observable.id,
+    );
+    expect(complete.truncated).toBe(false);
+    expect(incomplete.truncated).toBe(true);
+    expect(incomplete.evidence).toEqual(complete.evidence);
+    expect(incomplete.evidenceVersion).not.toBe(complete.evidenceVersion);
+  } finally {
+    evidence.mockRestore();
+  }
+});
 describe("first complete indicator-to-assessment pipeline", () => {
   it("imports ATT&CK and ThreatFox, deduplicates, generates bounded candidates and persists probabilities", async () => {
     const objects = [

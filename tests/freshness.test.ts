@@ -152,6 +152,48 @@ const blockActions = (): Assessment["recommended_actions"] => [
 ];
 
 describe("freshness policy (packages/intel/src/freshness.ts)", () => {
+  it("calculates bounds for large correlation groups without spreading into the call stack", () => {
+    const evidence = Array.from({ length: 150000 }, () => ({
+      observedAt: at(2),
+    }));
+    const state = freshness(evidence, NOW);
+    expect(state.first_observed).toBe(at(2));
+    expect(state.last_observed).toBe(at(2));
+    expect(state.activity).toBe("active");
+  });
+  it("future observations cannot extend activity or satisfy the blocking freshness gate", () => {
+    const future = { observedAt: at(-180), data: { malicious: true } };
+    const state = freshness([future], NOW);
+    expect(state.activity).toBe("unknown");
+    expect(state.last_observed).toBeNull();
+    expect(state.valid_until).toBeNull();
+    expect(state.stale_reasons).toContain("FUTURE_OBSERVATION_DATE");
+    expect(
+      freshEvidenceGate(blockActions(), [future], {
+        awaitingReview: false,
+        now: NOW,
+      }).downgraded,
+    ).toBe(true);
+    const mixed = freshness([{ observedAt: at(2) }, future], NOW);
+    expect(mixed.activity).toBe("stale");
+    expect(mixed.last_observed).toBe(at(2));
+  });
+
+  it.each([
+    [{ observedAt: at(2), data: { status: "offline" } }],
+    [{ observedAt: at(2) }, { data: { malicious: true } }],
+  ])(
+    "incomplete or offline observations cannot justify a fresh block",
+    (...evidence) => {
+      expect(
+        freshEvidenceGate(blockActions(), evidence, {
+          awaitingReview: false,
+          now: NOW,
+        }).downgraded,
+      ).toBe(true);
+    },
+  );
+
   it("active only with recent dated evidence, nothing offline or undated", () => {
     const state = freshness(
       [{ observedAt: at(5), data: { malicious: true, status: "online" } }],
@@ -205,7 +247,9 @@ describe("freshness policy (packages/intel/src/freshness.ts)", () => {
     expect(fresh.activity).not.toBe("active");
     expect(fresh.activity).toBe("stale");
     expect(fresh.stale).toBe(true);
-    expect(fresh.stale_reasons).toContain("SOURCE_STATUS_OFFLINE_AT_COLLECTION");
+    expect(fresh.stale_reasons).toContain(
+      "SOURCE_STATUS_OFFLINE_AT_COLLECTION",
+    );
 
     const expired = freshness(
       [{ observedAt: at(220), data: { status: "offline" } }],
@@ -263,7 +307,9 @@ describe("audit regression — one 220-day-old Feodo record, status offline", ()
     expect(state.valid_until).toBe(
       new Date(Date.parse(evidence.observedAt!) + 90 * DAY).toISOString(),
     );
-    expect(state.stale_reasons).toContain("SOURCE_STATUS_OFFLINE_AT_COLLECTION");
+    expect(state.stale_reasons).toContain(
+      "SOURCE_STATUS_OFFLINE_AT_COLLECTION",
+    );
     expect(state.stale_reasons).toContain("EVIDENCE_OLDER_THAN_90D");
   });
 
@@ -306,9 +352,9 @@ describe("audit regression — one 220-day-old Feodo record, status offline", ()
     });
     expect(gated.downgraded).toBe(true);
     expect(gated.actions.some((x) => x.action === "block")).toBe(false);
-    expect(
-      gated.actions.flatMap((x) => x.reason_codes),
-    ).toContain("FRESH_EVIDENCE_REQUIRED");
+    expect(gated.actions.flatMap((x) => x.reason_codes)).toContain(
+      "FRESH_EVIDENCE_REQUIRED",
+    );
   });
 });
 

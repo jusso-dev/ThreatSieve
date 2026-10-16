@@ -258,6 +258,86 @@ it("feed finalization advances the checkpoint and counts exactly once under conc
   ).toBe("accepted");
 });
 
+it("feed finalization skips completed history through its indexed finalization state", async () => {
+  const query =
+    "SELECT data,result FROM pipeline_jobs WHERE stage='feed-sync' AND status='complete' AND json_extract(result,'$.finalized') IS NULL ORDER BY created_at LIMIT 10";
+  const root = await (
+    await import("../workers/feed-sync/index")
+  ).queueFeedSync(env, "feodo");
+  await repo.finish(root, {
+    rawKey: "raw/test.json",
+    records: 0,
+    checkpoint: "cost-test",
+  });
+  expect((await db.prepare(query).all()).results).toHaveLength(1);
+  await (await import("../workers/feed-sync/index")).finalizeFeeds(env);
+  expect((await db.prepare(query).all()).results).toHaveLength(0);
+  const plan = await db
+    .prepare("EXPLAIN QUERY PLAN " + query)
+    .all<{ detail: string }>();
+  expect(
+    plan.results.some((row) =>
+      /SEARCH pipeline_jobs USING INDEX jobs_feed_finalization/.test(
+        row.detail,
+      ),
+    ),
+  ).toBe(true);
+  expect(plan.results.some((row) => /SCAN|TEMP B-TREE/.test(row.detail))).toBe(
+    false,
+  );
+});
+
+it.each(["queued", "running", "failed"] as const)(
+  "%s feed descendants prevent checkpoint advancement without counting completed history",
+  async (status) => {
+    const { queueFeedSync, finalizeFeeds } =
+      await import("../workers/feed-sync/index");
+    const root = await queueFeedSync(env, "feodo");
+    await repo.finish(root, {
+      rawKey: "raw/test.json",
+      records: 0,
+      checkpoint: "blocked-" + status,
+    });
+    const child = makeJob(
+      "enrich",
+      "entity",
+      undefined,
+      {},
+      root.correlationId,
+    );
+    await repo.enqueue(child);
+    await db
+      .prepare("UPDATE pipeline_jobs SET status=? WHERE id=?")
+      .bind(status, child.jobId)
+      .run();
+    await db
+      .prepare(
+        "WITH RECURSIVE history(n) AS (SELECT 1 UNION ALL SELECT n+1 FROM history WHERE n<500) INSERT INTO pipeline_jobs(id,entity_id,stage,status,data,result,created_at,updated_at) SELECT 'completed-history-'||n,'history','enrich','complete',json_object('correlationId',?),'{}',?,? FROM history",
+      )
+      .bind(root.correlationId, root.createdAt, root.createdAt)
+      .run();
+    await finalizeFeeds(env);
+    const result = await db
+      .prepare("SELECT result FROM pipeline_jobs WHERE id=?")
+      .bind(root.jobId)
+      .first<{ result: string }>();
+    expect(JSON.parse(result!.result).finalized).toBeUndefined();
+    if (status === "failed")
+      expect(
+        await db.prepare("SELECT status FROM sources WHERE id='feodo'").first(),
+      ).toEqual({ status: "error" });
+    await repo.finish(child, {});
+    await finalizeFeeds(env);
+    expect(
+      await db
+        .prepare(
+          "SELECT checkpoint FROM feed_checkpoints WHERE source_id='feodo'",
+        )
+        .first(),
+    ).toEqual({ checkpoint: "blocked-" + status });
+  },
+);
+
 it("a batch of completed duplicate deliveries acknowledges without republishing work", async () => {
   const job = makeJob("enrich", "already-completed");
   await repo.enqueue(job);

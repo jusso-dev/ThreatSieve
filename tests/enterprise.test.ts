@@ -13,6 +13,7 @@ import {
 import { scoreDossier } from "../packages/enterprise/src/scoring";
 import {
   criterionMatches,
+  hasMatchCriteria,
   requirementCoverage,
 } from "../packages/enterprise/src/intelligence";
 let mf: Miniflare,
@@ -75,6 +76,64 @@ beforeAll(async () => {
 afterAll(async () => {
   await mf?.dispose();
 });
+
+it("confidence-only and observation-window subscriptions match supported intelligence", async () => {
+  const { matchObject } = await import("../packages/enterprise/src/automation");
+  const observable = await normalise("scalar-criteria.enterprise.test");
+  await a.intel.putObservable(observable, p);
+  const observed = "2025-01-01T00:00:00.000Z";
+  const now = new Date().toISOString();
+  await a.intel.putEvidence(observable.id, {
+    id: "scalar-criteria-evidence",
+    type: "feed",
+    sourceId: "mitre",
+    provenance: p,
+    confidence: 0.8,
+    data: { malicious: true },
+    observedAt: observed,
+    createdAt: now,
+    behavioural: false,
+  });
+  const change = {
+    id: "scalar-change",
+    tenant_id: null,
+    entity_id: observable.id,
+    event_type: "evidence.created",
+    reference_id: "scalar-criteria-evidence",
+    created_at: now,
+  };
+  for (const [criteria, matches] of [
+    [{ minConfidence: 0.7 }, true],
+    [{ minConfidence: 0.9 }, false],
+    [
+      { from: "2024-12-31T00:00:00.000Z", to: "2025-01-02T00:00:00.000Z" },
+      true,
+    ],
+    [{ from: "2026-01-01T00:00:00.000Z" }, false],
+  ] as const) {
+    expect(hasMatchCriteria(MatchCriteria.parse(criteria))).toBe(true);
+    const object = await a.save({
+      kind: "watchlist",
+      title: "Scalar criteria regression",
+      status: "paused",
+      criteria,
+    });
+    expect(Boolean(await matchObject(a, object, change))).toBe(matches);
+  }
+  expect(hasMatchCriteria(MatchCriteria.parse({}))).toBe(false);
+  const entity = (await a.intel.entity(observable.id))!;
+  const undated = (await a.intel.evidence(observable.id)).map((record) => ({
+    ...record,
+    observedAt: undefined,
+  }));
+  expect(
+    criterionMatches(
+      MatchCriteria.parse({ from: "2024-01-01T00:00:00.000Z" }),
+      entity,
+      undated,
+    ).matches,
+  ).toBe(false);
+});
 it("normalizes CIDR host bits before deterministic identity generation", async () => {
   expect((await normalise("192.0.2.42/24")).id).toBe(
     (await normalise("192.0.2.0/24")).id,
@@ -82,6 +141,36 @@ it("normalizes CIDR host bits before deterministic identity generation", async (
   expect((await normalise("2001:db8::1234/32")).normalizedValue).toBe(
     "2001:db8::/32",
   );
+});
+
+it("dossier scoring does not award observation recency for newly collected undated intelligence", async () => {
+  const observable = await normalise("undated-scoring.example");
+  await a.intel.putObservable(observable, p);
+  const entity = (await a.intel.entity(observable.id))!;
+  const evidence: Evidence = {
+    id: "undated-scoring-record",
+    type: "feed",
+    sourceId: "mitre",
+    provenance: p,
+    confidence: 0.9,
+    data: { malicious: true },
+    createdAt: new Date().toISOString(),
+    behavioural: false,
+  };
+  const scores = scoreDossier(
+    entity,
+    [evidence],
+    [],
+    EnvironmentSchema.parse({}),
+  );
+  expect(
+    scores.threat.factors.some(
+      (factor) => factor.code === "RECENT_MALICIOUS_OBSERVATION",
+    ),
+  ).toBe(false);
+  expect(
+    scores.confidence.factors.some((factor) => factor.code === "RECENCY"),
+  ).toBe(false);
 });
 it("creates each operational object with audited history and tenant isolation", async () => {
   for (const kind of [

@@ -4,6 +4,97 @@ import { Repository } from "../packages/database/src/repository";
 import { stixRecord } from "../packages/intel/src/feeds";
 import { vpcRequest } from "../workers/feed-sync/index";
 const repo = {} as Repository; // These adapter tests do not use persistence.
+
+it("optional feeds retain unknown observation time instead of refreshing intelligence at collection", async () => {
+  const fixtures = [
+    {
+      id: "otx",
+      input: {
+        id: "pulse-1",
+        name: "Historical report",
+        indicators: [
+          { id: 1, indicator: "historical.example", type: "domain" },
+        ],
+      },
+    },
+    {
+      id: "virustotal",
+      input: {
+        observable: "historical.example",
+        raw: {
+          data: {
+            id: "historical.example",
+            attributes: {
+              last_analysis_stats: { malicious: 0, undetected: 0 },
+            },
+          },
+        },
+      },
+    },
+    {
+      id: "greynoise",
+      input: {
+        observable: "192.0.2.1",
+        raw: { ip: "192.0.2.1", noise: true, riot: false },
+      },
+    },
+    {
+      id: "misp-feed",
+      input: {
+        uuid: "attribute-date",
+        value: "historical.example",
+        type: "domain",
+        timestamp: String(Math.floor(Date.now() / 1000)),
+      },
+    },
+  ] as const;
+  for (const fixture of fixtures) {
+    const feed = new OptionalFeed(
+      fixture.id,
+      "Synthetic optional source",
+      repo,
+      { enabled: true },
+    );
+    const records = await feed.normalize(fixture.input);
+    expect(records[0]!.evidence[0]!.observedAt).toBeUndefined();
+    if (fixture.id === "virustotal")
+      expect(records[0]!.evidence[0]!.data.malicious).toBeUndefined();
+  }
+});
+
+it("preserves provider observation dates and does not treat zero detections as proof of benignness", async () => {
+  const observed = "2025-01-01T00:00:00.000Z";
+  const vt = new OptionalFeed("virustotal", "VirusTotal", repo, {
+    enabled: true,
+  });
+  const input = {
+    observable: "dated.example",
+    raw: {
+      data: {
+        id: "dated.example",
+        attributes: {
+          last_analysis_stats: { malicious: 0 },
+          last_analysis_date: Date.parse(observed) / 1000,
+        },
+      },
+    },
+  };
+  const records = await vt.normalize(input);
+  expect(records[0]!.evidence[0]!.observedAt).toBe(observed);
+  expect(records[0]!.evidence[0]!.data.malicious).toBeUndefined();
+  input.raw.data.attributes.last_analysis_stats.malicious = 2;
+  expect((await vt.normalize(input))[0]!.evidence[0]!.data.malicious).toBe(
+    true,
+  );
+  const misp = new OptionalFeed("misp-feed", "MISP", repo, { enabled: true });
+  const dated = await misp.normalize({
+    uuid: "dated-attribute",
+    value: "dated.example",
+    type: "domain",
+    last_seen: observed,
+  });
+  expect(dated[0]!.evidence[0]!.observedAt).toBe(observed);
+});
 it("preserves TAXII continuation tokens without following remote pagination URLs", async () => {
   const urls: URL[] = [];
   let page = 0;

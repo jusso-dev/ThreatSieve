@@ -18,6 +18,13 @@ export interface OptionalFeedConfig {
   /** TAXII objects per page (1-1000); servers may cap it lower. Default 100. */
   pageLimit?: number;
 }
+function observationDate(
+  value: string | number | undefined,
+): string | undefined {
+  if (value === undefined) return undefined;
+  const date = new Date(typeof value === "number" ? value * 1000 : value);
+  return Number.isFinite(date.getTime()) ? date.toISOString() : undefined;
+}
 export class OptionalFeed extends PublicFeed {
   constructor(
     id: "otx" | "virustotal" | "greynoise" | "taxii" | "stix" | "misp-feed",
@@ -285,6 +292,7 @@ export class OptionalFeed extends PublicFeed {
       value: string,
       data: Record<string, unknown>,
       recordId: string,
+      observedAt?: string | number,
     ): Promise<NormalizedIntelRecord> => ({
       observable: { value },
       provenance: { ...provenance, sourceRecordId: recordId },
@@ -298,7 +306,7 @@ export class OptionalFeed extends PublicFeed {
           data,
           confidence: 0.65,
           createdAt: now,
-          observedAt: now,
+          observedAt: observationDate(observedAt),
           behavioural: false,
         },
       ],
@@ -313,6 +321,8 @@ export class OptionalFeed extends PublicFeed {
               id: z.number(),
               indicator: z.string(),
               type: z.string(),
+              first_seen: z.string().optional(),
+              last_seen: z.string().optional(),
             }),
           ),
         })
@@ -330,6 +340,7 @@ export class OptionalFeed extends PublicFeed {
                 sourceClaim: "Listed in OTX pulse",
               },
               String(i.id),
+              i.last_seen ?? i.first_seen,
             ),
           );
         } catch {
@@ -348,6 +359,7 @@ export class OptionalFeed extends PublicFeed {
               attributes: z
                 .object({
                   last_analysis_stats: z.record(z.string(), z.number()),
+                  last_analysis_date: z.number().int().nonnegative().optional(),
                 })
                 .passthrough(),
             }),
@@ -360,11 +372,12 @@ export class OptionalFeed extends PublicFeed {
           item.observable,
           {
             analysisStats: stats,
-            malicious: (stats.malicious ?? 0) > 0,
+            malicious: (stats.malicious ?? 0) > 0 ? true : undefined,
             description:
               "VirusTotal engine results; engines are not counted as independent sources",
           },
           item.raw.data.id,
+          item.raw.data.attributes.last_analysis_date,
         ),
       ];
     }
@@ -379,6 +392,7 @@ export class OptionalFeed extends PublicFeed {
               riot: z.boolean(),
               classification: z.string().optional(),
               name: z.string().optional(),
+              last_seen: z.string().optional(),
             })
             .passthrough(),
         })
@@ -397,6 +411,7 @@ export class OptionalFeed extends PublicFeed {
                   : undefined,
           },
           item.raw.ip,
+          item.raw.last_seen,
         ),
       ];
     }
@@ -409,6 +424,8 @@ export class OptionalFeed extends PublicFeed {
           comment: z.string().optional(),
           to_ids: z.boolean().optional(),
           timestamp: z.string().optional(),
+          first_seen: z.string().optional(),
+          last_seen: z.string().optional(),
           eventUuid: z.string().optional(),
           eventInfo: z.string().optional(),
           eventTags: z.array(z.string()).default([]),
@@ -463,12 +480,9 @@ export class OptionalFeed extends PublicFeed {
             misp: item,
           },
           item.uuid + ":" + part,
+          item.last_seen ?? item.first_seen,
         );
         record.observable = { value, type };
-        if (item.timestamp && /^\d+$/.test(item.timestamp))
-          record.evidence[0]!.observedAt = new Date(
-            Number(item.timestamp) * 1000,
-          ).toISOString();
         records.push(record);
       }
       return records;

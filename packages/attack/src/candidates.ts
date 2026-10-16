@@ -36,6 +36,7 @@ export async function buildEvidenceBundle(
   const attackCandidates: Candidate[] = [];
   const actorCandidates: Candidate[] = [];
   for (let depth = 0; depth < 3 && frontier.length; depth++) {
+    if (frontier.length > 30) truncated = true;
     const next: string[] = [];
     for (const id of frontier.slice(0, 30)) {
       const edges = await repo.edges(id, 41, tenantId);
@@ -79,10 +80,14 @@ export async function buildEvidenceBundle(
           dimensions,
           origin: "graph",
         };
-        if (entity.type === "attack-technique" && attackCandidates.length < 20)
-          attackCandidates.push(candidate);
-        if (entity.type === "threat-actor" && actorCandidates.length < 10)
-          actorCandidates.push(candidate);
+        if (entity.type === "attack-technique") {
+          if (attackCandidates.length < 20) attackCandidates.push(candidate);
+          else truncated = true;
+        }
+        if (entity.type === "threat-actor") {
+          if (actorCandidates.length < 10) actorCandidates.push(candidate);
+          else truncated = true;
+        }
       }
     }
     frontier = next;
@@ -124,6 +129,7 @@ export async function buildEvidenceBundle(
     attackCandidates,
     actorCandidates,
     customerContext,
+    truncated,
     day: new Date().toISOString().slice(0, 10),
   };
   return {
@@ -180,7 +186,11 @@ export async function retrieveSemanticCandidates(
         : entity.type === "threat-actor"
           ? bundle.actorCandidates
           : null;
-    if (!dest || dest.some((c) => c.id === id) || dest.length >= 20) continue;
+    if (!dest || dest.some((c) => c.id === id)) continue;
+    if (dest.length >= (entity.type === "threat-actor" ? 10 : 20)) {
+      bundle.truncated = true;
+      continue;
+    }
     dest.push({
       id,
       name: entity.name,
@@ -199,6 +209,7 @@ export async function retrieveSemanticCandidates(
       canonicalJson({
         attack: bundle.attackCandidates,
         actors: bundle.actorCandidates,
+        truncated: bundle.truncated,
       }),
   );
 }

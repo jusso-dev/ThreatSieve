@@ -3,6 +3,7 @@ import { Repository } from "../../database/src/repository";
 import { OperationsRepository } from "./repository";
 import {
   criterionMatches,
+  hasMatchCriteria,
   dossier,
   cachedCoverage,
   workspaceMatchStatement,
@@ -86,15 +87,7 @@ export async function matchObject(
         .first(),
     );
   // Empty criteria cannot match a new entity. Curated references still match directly.
-  if (
-    !direct &&
-    !(
-      "criteria" in object &&
-      Object.values(object.criteria).some(
-        (v) => Array.isArray(v) && v.length > 0,
-      )
-    )
-  )
+  if (!direct && !("criteria" in object && hasMatchCriteria(object.criteria)))
     return null;
   const d = await dossier(repo, change.entity_id);
   const criteria =
@@ -174,12 +167,7 @@ export async function processOperation(db: D1Database, job: PipelineJob) {
       .bind(
         cursor,
         job.tenantId,
-        Number(
-          "criteria" in object &&
-            Object.values(object.criteria).some(
-              (v) => Array.isArray(v) && v.length > 0,
-            ),
-        ),
+        Number("criteria" in object && hasMatchCriteria(object.criteria)),
         JSON.stringify(object.references),
         job.tenantId,
         object.id,
@@ -317,12 +305,7 @@ export async function processOperation(db: D1Database, job: PipelineJob) {
       await intel.finish(job, { skipped: "different trigger" });
       return;
     }
-    const hasCriteria =
-      Object.values(object.criteria).some(
-        (v) => Array.isArray(v) && v.length > 0,
-      ) ||
-      object.criteria.minConfidence > 0 ||
-      Boolean(object.criteria.from || object.criteria.to);
+    const hasCriteria = hasMatchCriteria(object.criteria);
     const matched = hasCriteria ? await matchObject(repo, object, event) : null;
     if (hasCriteria && !matched) {
       await intel.finish(job, { skipped: "conditions not met" });

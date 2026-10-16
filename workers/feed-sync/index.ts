@@ -272,13 +272,13 @@ export async function finalizeFeeds(env: AppEnv) {
   for (const row of roots.results) {
     const job = JobSchema.parse(JSON.parse(row.data));
     const pending = await env.DB.prepare(
-      "SELECT COUNT(*) AS n FROM pipeline_jobs WHERE json_extract(data,'$.correlationId')=? AND id!=? AND status!='complete'",
+      "SELECT EXISTS(SELECT 1 FROM pipeline_jobs WHERE json_extract(data,'$.correlationId')=? AND id!=? AND status IN ('queued','running','failed')) AS n",
     )
       .bind(job.correlationId, job.jobId)
       .first<{ n: number }>();
     if (pending?.n) {
       const failed = await env.DB.prepare(
-        "SELECT COUNT(*) AS n FROM pipeline_jobs WHERE json_extract(data,'$.correlationId')=? AND status='failed'",
+        "SELECT EXISTS(SELECT 1 FROM pipeline_jobs WHERE json_extract(data,'$.correlationId')=? AND status='failed') AS n",
       )
         .bind(job.correlationId)
         .first<{ n: number }>();

@@ -487,3 +487,39 @@ describe("migration 0022 backfill", () => {
     }
   });
 });
+
+it("correlation observation bounds exclude future evidence while retaining valid observations", async () => {
+  vi.useFakeTimers();
+  vi.setSystemTime("2026-10-16T00:00:00.000Z");
+  await addObservable("obs-future-boundary", "future-boundary.example.test");
+  const data = { malwareEntityId: "malware-future-boundary" };
+  for (const [id, observedAt, sourceId] of [
+    ["valid-boundary-evidence", "2026-10-15T00:00:00.000Z", "src-a"],
+    ["future-boundary-evidence", "2027-01-01T00:00:00.000Z", "src-b"],
+  ]) {
+    await addEvidence({
+      id: id!,
+      observableId: "obs-future-boundary",
+      type: "malware",
+      sourceId: sourceId!,
+      data,
+      observedAt,
+      confidence: 0.9,
+      createdAt: T0,
+    });
+  }
+  await correlate(repo, "obs-future-boundary");
+  const id = "cluster_" + (await digest("malware:malware-future-boundary"));
+  expect(
+    await db
+      .prepare(
+        "SELECT first_observed,last_observed,last_processed_at FROM threat_clusters WHERE id=?",
+      )
+      .bind(id)
+      .first(),
+  ).toEqual({
+    first_observed: "2026-10-15T00:00:00.000Z",
+    last_observed: "2026-10-15T00:00:00.000Z",
+    last_processed_at: "2026-10-16T00:00:00.000Z",
+  });
+});

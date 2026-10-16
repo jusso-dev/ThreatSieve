@@ -5,10 +5,7 @@ import type {
 } from "../../schemas/src/index";
 import { EntitySchema } from "../../schemas/src/index";
 import type { Repository } from "./repository";
-import {
-  AssessmentFilters,
-  EntityFilters,
-} from "../../schemas/src/query";
+import { AssessmentFilters, EntityFilters } from "../../schemas/src/query";
 import { AppError } from "../../observability/src/index";
 import { encodeAssessmentCursor } from "./assessment-query";
 
@@ -45,9 +42,7 @@ function upstreamKey(p: SourceProvenance, index: number): string {
  * mirrored:true. Independent corroboration equals the number of non-mirrored
  * assertions — mirrors never increment it.
  */
-export function annotateMirroredAssertions(
-  provenances: SourceProvenance[],
-): {
+export function annotateMirroredAssertions(provenances: SourceProvenance[]): {
   assertions: SourceAssertion[];
   source_count: number;
   mirror_count: number;
@@ -97,7 +92,11 @@ export async function identityGroup(
   repo: Repository,
   tenantId: string,
   entityId: string,
-): Promise<{ canonicalId: string; memberIds: string[]; aliasIds: string[] } | null> {
+): Promise<{
+  canonicalId: string;
+  memberIds: string[];
+  aliasIds: string[];
+} | null> {
   const db = repo.db;
   const explicit = await db
     .prepare(
@@ -129,17 +128,19 @@ export async function identityGroup(
       }
     }
     const ent = await db
-      .prepare("SELECT external_id FROM entities WHERE id=?")
+      .prepare("SELECT external_id,type FROM entities WHERE id=?")
       .bind(id)
-      .first<{ external_id: string | null }>();
+      .first<{ external_id: string | null; type: string }>();
+    if (!ent) continue;
     const ext = ent?.external_id?.trim();
-    if (ext && !seenExt.has(ext)) {
-      seenExt.add(ext);
+    const externalKey = ent.type + ":" + ext;
+    if (ext && !seenExt.has(externalKey)) {
+      seenExt.add(externalKey);
       const peers = await db
         .prepare(
-          "SELECT id FROM entities WHERE external_id=? AND length(trim(external_id))>0",
+          "SELECT id FROM entities WHERE external_id=? AND type=? AND length(trim(external_id))>0 AND (type!='observable' OR id=?)",
         )
-        .bind(ext)
+        .bind(ext, ent.type, id)
         .all<{ id: string }>();
       for (const p of peers.results) {
         if (!discovered.has(p.id)) {
@@ -155,13 +156,14 @@ export async function identityGroup(
       .bind(id)
       .all<{ rid: string }>();
     for (const { rid } of records.results) {
-      if (!rid || seenRec.has(rid)) continue;
-      seenRec.add(rid);
+      const recordKey = ent.type + ":" + rid;
+      if (!rid || seenRec.has(recordKey)) continue;
+      seenRec.add(recordKey);
       const peers = await db
         .prepare(
-          "SELECT DISTINCT entity_id AS id FROM entity_sources WHERE source_record_id=?",
+          "SELECT DISTINCT s.entity_id AS id FROM entity_sources s JOIN entities e ON e.id=s.entity_id WHERE s.source_record_id=? AND e.type=? AND (e.type!='observable' OR e.id=?)",
         )
-        .bind(rid)
+        .bind(rid, ent.type, id)
         .all<{ id: string }>();
       for (const p of peers.results) {
         if (!discovered.has(p.id)) {
@@ -265,9 +267,7 @@ export async function unaliasEntity(
   aliasId: string,
 ): Promise<boolean> {
   const result = await db
-    .prepare(
-      "DELETE FROM canonical_aliases WHERE tenant_id=? AND alias_id=?",
-    )
+    .prepare("DELETE FROM canonical_aliases WHERE tenant_id=? AND alias_id=?")
     .bind(tenantId, aliasId)
     .run();
   return Boolean(result.meta.changes);
@@ -498,12 +498,7 @@ export async function latestAssessmentPerObservable(
   const batchSize = Math.max(limit * 5, 50);
   let guard = 0;
   while (slots.length < limit + 1 && guard++ < 20) {
-    const batch = await repo.assessments(
-      tenantId,
-      batchSize,
-      cursor,
-      filters,
-    );
+    const batch = await repo.assessments(tenantId, batchSize, cursor, filters);
     if (!batch.length) break;
     for (const a of batch) {
       const latestId = latestIds.get(a.observable.id);

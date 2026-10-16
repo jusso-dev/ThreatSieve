@@ -53,7 +53,7 @@ export class Repository {
   async resolveAlias(name: string, type?: string) {
     const rows = await this.db
       .prepare(
-        "SELECT DISTINCT e.data FROM entities e LEFT JOIN entity_aliases a ON a.entity_id=e.id WHERE (a.alias=? OR e.external_id=? OR lower(e.name)=?) AND (? IS NULL OR e.type=?) LIMIT 3",
+        "SELECT DISTINCT e.data FROM entities e WHERE e.id IN (SELECT entity_id FROM entity_aliases WHERE alias=? UNION SELECT id FROM entities WHERE external_id=? UNION SELECT id FROM entities WHERE lower(name)=?) AND (? IS NULL OR e.type=?) LIMIT 3",
       )
       .bind(aliasKey(name), name, aliasKey(name), type ?? null, type ?? null)
       .all<{ data: string }>();
