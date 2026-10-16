@@ -3,6 +3,9 @@ import { Miniflare } from "miniflare";
 import { readdirSync, readFileSync } from "node:fs";
 import { migrationStatements } from "../packages/database/src/migrations";
 import {
+  GLOBAL_JOBS_SQL,
+  TENANT_JOBS_SQL,
+  operationalJobs,
   operationalAlerts,
   operationalReport,
   recordMaintenanceHeartbeat,
@@ -233,4 +236,89 @@ it("heartbeat write scope cannot change intelligence; errors preserve last succe
     (await call("/v1/assess", "ops-write", { observable: "example.com" }))
       .status,
   ).toBe(403);
+});
+it("operational job summary seeks live work instead of scanning job history", async () => {
+  // Regression: /v1/ops/status read every global pipeline job ever created and
+  // crossed the production probe's 30 second timeout as the table grew.
+  const tenant = "ops-b",
+    since = new Date(now - 86400000).toISOString(),
+    ancient = new Date(now - 30 * 86400000).toISOString(),
+    recent = new Date(now - 60000).toISOString();
+  const insert = db.prepare(
+    "INSERT INTO pipeline_jobs(id,tenant_id,entity_id,stage,status,data,result,created_at,updated_at) VALUES(?,?,'e',?,?,'{}',?,?,?)",
+  );
+  const rows: [string | null, string, string, string | null, string][] = [
+    [null, "normalise", "complete", "{}", ancient],
+    [null, "normalise", "complete", "{}", recent],
+    [null, "normalise", "queued", null, recent],
+    [null, "classify", "running", "{}", recent],
+    [null, "classify", "failed", null, ancient],
+    [tenant, "export", "complete", "{}", ancient],
+    [tenant, "export", "queued", null, ancient],
+    ["ops-a", "export", "queued", null, recent],
+  ];
+  await db.batch(
+    rows.map(([t, stage, status, result, when], i) =>
+      insert.bind("plan-" + i, t, stage, status, result, when, when),
+    ),
+  );
+  const results = await operationalJobs(db, tenant, since);
+  const mine = results.filter((r) =>
+    ["normalise", "classify", "export"].includes(r.stage),
+  );
+  expect(mine).toEqual([
+    {
+      stage: "classify",
+      status: "failed",
+      count: 1,
+      oldest: ancient,
+      stale_result_count: 0,
+    },
+    {
+      stage: "classify",
+      status: "running",
+      count: 1,
+      oldest: recent,
+      stale_result_count: 1,
+    },
+    {
+      stage: "export",
+      status: "queued",
+      count: 1,
+      oldest: ancient,
+      stale_result_count: 0,
+    },
+    {
+      stage: "normalise",
+      status: "complete",
+      count: 1,
+      oldest: recent,
+      stale_result_count: 0,
+    },
+    {
+      stage: "normalise",
+      status: "queued",
+      count: 1,
+      oldest: recent,
+      stale_result_count: 0,
+    },
+  ]);
+  for (const [sql, args] of [
+    [TENANT_JOBS_SQL, [tenant, since]],
+    [GLOBAL_JOBS_SQL, [since]],
+  ] as const) {
+    const plan = await db
+      .prepare("EXPLAIN QUERY PLAN " + sql)
+      .bind(...args)
+      .all<{ detail: string }>();
+    const details = plan.results.map((r) => r.detail);
+    expect(details.some((d) => d.startsWith("SEARCH pipeline_jobs"))).toBe(
+      true,
+    );
+    expect(details.filter((d) => /^SCAN pipeline_jobs/.test(d))).toEqual([]);
+    // A bare tenant seek reads the whole append-only history for that scope.
+    expect(details.filter((d) => /\((tenant_id|status)=\?\)$/.test(d))).toEqual(
+      [],
+    );
+  }
 });

@@ -12,6 +12,68 @@ const required = new Set([
   "feodo",
   "cisa-kev",
 ]);
+type JobRow = OperationalReport["jobs"][number];
+/**
+ * Pipeline job summary SQL for the operations report, one statement per scope.
+ *
+ * pipeline_jobs is append-only, so the old single-predicate form
+ * `(tenant_id=? OR tenant_id IS NULL) AND (status!='complete' OR updated_at>=?)`
+ * could not seek on `jobs_operational_scope` and read every global job ever
+ * created. Each compound term here is an equality or range seek on
+ * (tenant_id,status,updated_at), so the rows read track live work rather than
+ * table history. D1 allows at most five compound terms, hence two statements.
+ */
+const jobsSql = (scope: string, since: string) =>
+  "SELECT stage,status,COUNT(*) AS count,MIN(created_at) AS oldest,SUM(CASE WHEN result IS NOT NULL AND status!='complete' THEN 1 ELSE 0 END) AS stale_result_count FROM (" +
+  [
+    ...["queued", "running", "failed"].map(
+      (status) =>
+        `SELECT stage,status,created_at,result FROM pipeline_jobs WHERE ${scope} AND status='${status}'`,
+    ),
+    `SELECT stage,status,created_at,result FROM pipeline_jobs WHERE ${scope} AND status='complete' AND updated_at>=${since}`,
+  ].join(" UNION ALL ") +
+  ") GROUP BY stage,status";
+/** Binds (tenant, since). */
+export const TENANT_JOBS_SQL = jobsSql("tenant_id=?1", "?2");
+/** Binds (since). */
+export const GLOBAL_JOBS_SQL = jobsSql("tenant_id IS NULL", "?1");
+export async function operationalJobs(
+  db: D1Database,
+  tenant: string,
+  since: string,
+): Promise<JobRow[]> {
+  const [own, global] = await Promise.all([
+    db.prepare(TENANT_JOBS_SQL).bind(tenant, since).all<JobRow>(),
+    db.prepare(GLOBAL_JOBS_SQL).bind(since).all<JobRow>(),
+  ]);
+  const merged = new Map<string, JobRow>();
+  for (const row of [...own.results, ...global.results]) {
+    const key = row.stage + "\u0000" + row.status,
+      prev = merged.get(key);
+    merged.set(
+      key,
+      prev
+        ? {
+            ...prev,
+            count: prev.count + row.count,
+            oldest:
+              prev.oldest && row.oldest
+                ? prev.oldest < row.oldest
+                  ? prev.oldest
+                  : row.oldest
+                : (prev.oldest ?? row.oldest),
+            stale_result_count:
+              prev.stale_result_count + row.stale_result_count,
+          }
+        : { ...row },
+    );
+  }
+  return [...merged.values()].sort(
+    (a, b) =>
+      (a.stage < b.stage ? -1 : a.stage > b.stage ? 1 : 0) ||
+      (a.status < b.status ? -1 : a.status > b.status ? 1 : 0),
+  );
+}
 export function operationalAlerts(
   report: Omit<OperationalReport, "alerts" | "status">,
   now = Date.now(),
@@ -154,11 +216,7 @@ export async function operationalReport(
       env.DB.prepare(
         "SELECT id,name,status,enabled,last_sync,next_sync,records_processed,records_added,records_updated,errors FROM sources WHERE id NOT IN ('customer','analyst','upload','demo') ORDER BY id",
       ).all<Omit<OperationalReport["feeds"][number], "configured">>(),
-      env.DB.prepare(
-        "SELECT stage,status,COUNT(*) AS count,MIN(created_at) AS oldest,SUM(CASE WHEN result IS NOT NULL AND status!='complete' THEN 1 ELSE 0 END) AS stale_result_count FROM pipeline_jobs WHERE (tenant_id=? OR tenant_id IS NULL) AND (status!='complete' OR updated_at>=?) GROUP BY stage,status ORDER BY stage,status",
-      )
-        .bind(tenant, since)
-        .all<OperationalReport["jobs"][number]>(),
+      operationalJobs(env.DB, tenant, since),
       env.DB.prepare(
         "SELECT COUNT(*) AS pending,MIN(o.created_at) AS oldest FROM outbox o JOIN pipeline_jobs p ON p.id=o.id WHERE o.dispatched_at IS NULL AND (p.tenant_id=? OR p.tenant_id IS NULL)",
       )
@@ -193,7 +251,7 @@ export async function operationalReport(
     heartbeat: heartbeat?.updated_at ?? null,
     archive_heartbeat: archive?.uploaded.toISOString() ?? null,
     feeds: configured,
-    jobs: jobs.results,
+    jobs,
     outbox: outbox ?? { pending: 0, oldest: null },
     usage: {
       calls: usage?.calls ?? 0,

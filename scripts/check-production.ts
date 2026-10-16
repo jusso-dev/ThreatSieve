@@ -1,5 +1,6 @@
 /** Public CI output must contain no tenant data, job identifiers or response bodies. */
 import { z } from "zod";
+import { probeFailureReason } from "./probe-failure";
 async function main() {
   const origin = z.url().parse(process.env.THREATSIEVE_API_ORIGIN);
   if (new URL(origin).protocol !== "https:")
@@ -44,10 +45,13 @@ async function main() {
             report.alerts.filter((a) => a.severity === "warning").length,
         );
       } else console.log(path + ": healthy");
-    } catch {
+    } catch (error) {
       failed = true;
       console.error(
-        path + ": probe failed; inspect the private System health view",
+        path +
+          ": probe failed (" +
+          probeFailureReason(error) +
+          "); inspect the private System health view",
       );
     }
   }
