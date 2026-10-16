@@ -27,7 +27,7 @@ const base: Omit<OperationalReport, "status" | "alerts"> = {
   archive_heartbeat: at,
   feeds: [],
   jobs: [],
-  outbox: { pending: 0, oldest: null },
+  outbox: { pending: 0, oldest: null, last_dispatch: null },
   usage: { calls: 0, input_tokens: 0, daily_limit: 1000 },
   integrations: [],
 };
@@ -60,10 +60,11 @@ it("stale services, failed jobs, budget and connector errors have explicit thres
           status: "failed",
           count: 1,
           oldest: old,
+          latest: old,
           stale_result_count: 1,
         },
       ],
-      outbox: { pending: 1, oldest: old },
+      outbox: { pending: 1, oldest: old, last_dispatch: null },
       usage: { ...base.usage, calls: 800 },
       integrations: [
         {
@@ -272,6 +273,7 @@ it("operational job summary seeks live work instead of scanning job history", as
       status: "failed",
       count: 1,
       oldest: ancient,
+      latest: ancient,
       stale_result_count: 0,
     },
     {
@@ -279,6 +281,7 @@ it("operational job summary seeks live work instead of scanning job history", as
       status: "running",
       count: 1,
       oldest: recent,
+      latest: recent,
       stale_result_count: 1,
     },
     {
@@ -286,6 +289,7 @@ it("operational job summary seeks live work instead of scanning job history", as
       status: "queued",
       count: 1,
       oldest: ancient,
+      latest: ancient,
       stale_result_count: 0,
     },
     {
@@ -293,6 +297,7 @@ it("operational job summary seeks live work instead of scanning job history", as
       status: "complete",
       count: 1,
       oldest: recent,
+      latest: recent,
       stale_result_count: 0,
     },
     {
@@ -300,6 +305,7 @@ it("operational job summary seeks live work instead of scanning job history", as
       status: "queued",
       count: 1,
       oldest: recent,
+      latest: recent,
       stale_result_count: 0,
     },
   ]);
@@ -321,4 +327,162 @@ it("operational job summary seeks live work instead of scanning job history", as
       [],
     );
   }
+});
+
+const job = (
+  stage: string,
+  status: string,
+  createdAgo: number,
+  latestAgo: number | null = createdAgo,
+): OperationalReport["jobs"][number] => ({
+  stage,
+  status,
+  count: 1,
+  oldest: new Date(now - createdAgo).toISOString(),
+  latest: latestAgo === null ? null : new Date(now - latestAgo).toISOString(),
+  stale_result_count: 0,
+});
+const minutes = (n: number) => n * 60000;
+it("a post-sync backlog that is still progressing only warns", () => {
+  const alerts = operationalAlerts(
+    {
+      ...base,
+      jobs: [
+        job("classify", "queued", minutes(120)),
+        job("classify", "complete", minutes(200), minutes(1)),
+      ],
+    },
+    now,
+  );
+  expect(alerts).toEqual([
+    {
+      code: "PIPELINE_BACKLOG",
+      severity: "warning",
+      subject: "classify",
+      message: expect.any(String),
+    },
+  ]);
+});
+it("a running claim counts as progress for its stage", () => {
+  const alerts = operationalAlerts(
+    {
+      ...base,
+      jobs: [
+        job("enrich", "queued", minutes(40)),
+        job("enrich", "running", minutes(30), minutes(2)),
+      ],
+    },
+    now,
+  );
+  expect(alerts.map((a) => [a.code, a.severity, a.subject])).toEqual([
+    ["PIPELINE_BACKLOG", "warning", "enrich"],
+  ]);
+});
+it("a stage with pending work and no recent progress is critical", () => {
+  for (const jobs of [
+    [job("classify", "queued", minutes(20))],
+    [
+      job("classify", "queued", minutes(20)),
+      job("classify", "complete", minutes(90), minutes(30)),
+    ],
+    // Progress on another stage does not count.
+    [
+      job("classify", "queued", minutes(20)),
+      job("enrich", "complete", minutes(5), minutes(1)),
+    ],
+  ])
+    expect(
+      operationalAlerts({ ...base, jobs }, now).filter(
+        (a) => a.severity === "critical",
+      ),
+    ).toEqual([
+      {
+        code: "PIPELINE_LAG",
+        severity: "critical",
+        subject: "classify",
+        message: expect.stringContaining("no progress"),
+      },
+    ]);
+});
+it("a backlog older than one feed cycle is critical despite progress", () => {
+  expect(
+    operationalAlerts(
+      {
+        ...base,
+        jobs: [
+          job("correlate", "queued", minutes(7 * 60)),
+          job("correlate", "complete", minutes(60), minutes(1)),
+        ],
+      },
+      now,
+    ),
+  ).toEqual([
+    {
+      code: "PIPELINE_LAG",
+      severity: "critical",
+      subject: "correlate",
+      message: "Backlog has not drained within one feed cycle.",
+    },
+  ]);
+});
+it("raises one lag alert per stage when queued and running rows both lag", () => {
+  const alerts = operationalAlerts(
+    {
+      ...base,
+      jobs: [
+        job("normalise", "queued", minutes(40)),
+        job("normalise", "running", minutes(50), minutes(45)),
+      ],
+    },
+    now,
+  );
+  expect(alerts.map((a) => [a.code, a.subject])).toEqual([
+    ["PIPELINE_LAG", "normalise"],
+  ]);
+});
+it("a publishing outbox warns, a stalled one is critical", () => {
+  const pending = (oldestAgo: number, dispatchAgo: number | null) =>
+    operationalAlerts(
+      {
+        ...base,
+        outbox: {
+          pending: 5,
+          oldest: new Date(now - oldestAgo).toISOString(),
+          last_dispatch:
+            dispatchAgo === null
+              ? null
+              : new Date(now - dispatchAgo).toISOString(),
+        },
+      },
+      now,
+    ).map((a) => [a.code, a.severity]);
+  expect(pending(minutes(5), null)).toEqual([]);
+  expect(pending(minutes(30), minutes(1))).toEqual([
+    ["OUTBOX_BACKLOG", "warning"],
+  ]);
+  expect(pending(minutes(30), minutes(11))).toEqual([
+    ["OUTBOX_LAG", "critical"],
+  ]);
+  expect(pending(minutes(30), null)).toEqual([["OUTBOX_LAG", "critical"]]);
+  expect(pending(minutes(7 * 60), minutes(1))).toEqual([
+    ["OUTBOX_LAG", "critical"],
+  ]);
+});
+it("the report carries stage progress and the last outbox publication", async () => {
+  const repo = new Repository(db);
+  const queued = makeJob("export", "progress-entity", "ops-a");
+  await repo.enqueue(queued);
+  const at = new Date().toISOString();
+  await db
+    .prepare(
+      "UPDATE outbox SET dispatched_at=? WHERE id=(SELECT id FROM outbox WHERE dispatched_at IS NULL ORDER BY created_at LIMIT 1)",
+    )
+    .bind(at)
+    .run();
+  const report = await operationalReport(env, "ops-a");
+  const row = report.jobs.find(
+    (j) => j.stage === "export" && j.status === "queued",
+  );
+  expect(row?.latest).toEqual(expect.any(String));
+  expect(report.outbox.last_dispatch).toBe(at);
 });

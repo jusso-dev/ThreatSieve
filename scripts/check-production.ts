@@ -1,6 +1,6 @@
 /** Public CI output must contain no tenant data, job identifiers or response bodies. */
 import { z } from "zod";
-import { probeFailureReason } from "./probe-failure";
+import { alertLabels, probeFailureReason } from "./probe-failure";
 async function main() {
   const origin = z.url().parse(process.env.THREATSIEVE_API_ORIGIN);
   if (new URL(origin).protocol !== "https:")
@@ -25,24 +25,23 @@ async function main() {
               z.object({
                 code: z.string().regex(/^[A-Z_]{1,80}$/),
                 severity: z.enum(["critical", "warning"]),
+                subject: z.string().optional(),
               }),
             ),
           })
           .parse(await res.json());
-        const codes = [
-          ...new Set(
-            report.alerts
-              .filter((a) => a.severity === "critical")
-              .map((a) => a.code),
-          ),
-        ];
-        if (codes.length) {
+        const critical = alertLabels(report.alerts, "critical");
+        const warnings = alertLabels(report.alerts, "warning");
+        if (critical.length) {
           failed = true;
-          console.error("Operational thresholds breached: " + codes.join(", "));
+          console.error(
+            "Operational thresholds breached: " + critical.join(", "),
+          );
         } else console.log("Operational critical thresholds: clear");
         console.log(
           "Operational warnings: " +
-            report.alerts.filter((a) => a.severity === "warning").length,
+            report.alerts.filter((a) => a.severity === "warning").length +
+            (warnings.length ? " (" + warnings.join(", ") + ")" : ""),
         );
       } else console.log(path + ": healthy");
     } catch (error) {
