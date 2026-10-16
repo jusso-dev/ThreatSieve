@@ -25,6 +25,37 @@ This is the current work register. Historical release records describe verificat
 | Bulk / match diagnostics | Bulk result shape `{processed, accepted, duplicates, rejected, errors}`. Match rows carry `match_status` and `last_evaluated_at`; `GET /v1/workspace/:id/matches` returns those fields. Evidence: `workers/ingest/upload.ts`, `migrations/0024_matching_state.sql`, `tests/bulk-diagnostics.test.ts`.   | None code-side.                                                                                                                                                     |
 | Requirements / reports | Criterion keys render through the `criterionLabel` map; report HTML cites claim `sourceRefs`; `publishedRevisions` freeze on publish. Evidence: `apps/web/components/workspace-objects.tsx`, `tests/reports.test.ts`.                                                                                    | None code-side.                                                                                                                                                     |
 
+## Cost and efficacy sweep — 16 October 2026
+
+The live staging database had stopped at migration 0018. Its outbox acknowledgement/cleanup updates scanned about 493,000 historical deliveries per execution, and feed finalization read 493,652 rows to return one unfinished root. After recording a Time Travel bookmark, migrations 0019–0021 and 0027 were applied to staging. The same feed lookup read two rows; both outbox updates use `outbox_dispatch_token`. Subsequent live analytics measured two rows per feed lookup and one per outbox cleanup. These are query measurements, not a forecast of the final bill. Production already had migration 0021.
+
+Operational checks found no unfinished production pipeline jobs. Staging retains 29 failed MISP enrichment jobs (26 malware and three actor records), and MISP's source status is error; the stored failures expose only the generic `Error` category. ThreatFox and URLhaus have never completed a sync in either environment. Verify configured credentials, scheduling and provider terms, and diagnose/replay the staging enrichment failures following its reviewed upgrade. The index repair does not establish complete feed coverage.
+
+The sweep inspected API/data access, ingestion and queue recovery, inference and evidence assembly, scoring and correlation, exports and source policy, browser data flows, and OpenCTI connector/recovery code. A static query-plan pass covered 270 literal prepared statements, including 150 read statements. Dynamic searches, graph traversal and urgency expressions were reviewed separately; this is not a claim that every query has been benchmarked against production data.
+
+The prepared application changes fix:
+
+- Indexed alias searches and bounded pending-job existence checks.
+- Future/offline/undated evidence being sufficient to recommend a fresh block; SQL urgency now agrees with the same freshness policy. Dossier recency uses observation time, and optional feeds retain unknown observation dates instead of substituting collection/modification time.
+- VirusTotal zero detections being treated as affirmative benign evidence.
+- Silent graph/candidate truncation, including a cache key that previously omitted truncation state. Actor retrieval follows the same ten-candidate budget as the classifier. Decision policy version is `decisions-v1.1.1` so old cached blocking decisions are not reused.
+- Confidence-only and observation-window subscriptions failing to match. Date criteria require dated observations.
+- Automatic identity inference merging different entity types or different observable values merely because a source record is shared; explicit analyst aliases remain supported.
+- Multiple corroborating records inflating a cluster's observable count and duplicating its member list. Large correlation groups no longer overflow the freshness helper's call stack.
+- Observation-date/confidence changes failing to notify subscriptions when the evidence payload itself did not change.
+
+Migrations 0028–0030 add history/identity/feedback/cluster indexes, correct historical cluster counts, and update material evidence-change notifications. They and the application changes are prepared for the reviewed release; the only live changes in this sweep so far are the staging index repair above. Staging still needs its separate 0022/0024–0026 migration review before deploying the current application. No retention deletion or feed shutdown was performed.
+
+Local verification passed 216 unit/integration cases, all 86 isolated full-stack browser cases and 18 Python connector/operations cases, plus lint, strict TypeScript, production build, security checks, JavaScript production dependency audit, and the offline evaluation self-check. Vitest used a 90-second per-test limit after two larger integration cases exceeded the default 30 seconds on the busy local host. GitHub's required release checks remain separate; the synthetic evaluation is not measured model calibration.
+
+### Remaining improvements, in priority order
+
+1. **Bound bulk continuation state.** `workers/ingest/upload.ts` carries every prior observable ID and every rejection in subsequent queue payloads. A representative continuation with 3,000 distinct IDs is 216,091 bytes, exceeding Cloudflare Queues' 128 KB limit, while `BulkRequest` accepts up to 100,000 inputs. Move deduplication/retry state into an indexed, tenant-scoped store and cap carried error samples while retaining full counts. Preserve retry accounting and cross-page duplicate detection.
+2. **Read bulk archives once per chunk.** Every 100-record continuation downloads and parses the complete upload again; `fanoutFeed` similarly reparses its whole archived batch. Persist bounded chunks or use a streaming partition stage to avoid approximately quadratic parsing/download work. This needs an idempotent archive/job contract, not just a smaller page size.
+3. **Distinguish original sources from redistributors.** Confidence factors still count configured independence groups, while canonical views collapse equal upstream record IDs. Record IDs from unrelated providers are not necessarily globally unique. Add explicit upstream identity/namespace metadata before unifying corroboration across classifier and dossier scores.
+4. **Use measured classifier comparisons.** The offline evaluation command defaults to comparing a synthetic baseline with itself. It verifies calculations, not efficacy. Obtain analyst-labelled representative cases and measured flash/full responses before tuning escalation, thresholds or auto-acceptance. No inference threshold was relaxed for cost savings.
+5. **Define history retention and incremental ingestion.** Delivered outbox rows, pipeline history, events and original archives need an approved retention policy; no production records were deleted. Unchanged public feed records still enter downstream work even when embeddings are cached. A versioned, atomic ingestion/delivery contract can avoid that work without losing recovery or provenance.
+
 ## Open ops — remaining, never done
 
 These items are outside the repository. They stay open until an owner completes them in the live environment. Placeholders below are not completion dates.

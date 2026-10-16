@@ -355,9 +355,9 @@ describe("audit finding 5 — priority queue decomposition", () => {
     );
     expect(u.urgency).toBeGreaterThanOrEqual(worstKnown.urgency);
     // The read model routes it to enrichment (leaf 1.2.1, read-only).
-    expect(effectiveRecommendations(syntheticInvalid).map((x) => x.action)).toEqual(
-      ["enrich"],
-    );
+    expect(
+      effectiveRecommendations(syntheticInvalid).map((x) => x.action),
+    ).toEqual(["enrich"]);
   });
 
   it("each urgency component moves the score in the expected direction", () => {
@@ -410,7 +410,9 @@ describe("audit finding 5 — priority queue decomposition", () => {
     ];
     expect(freshness(observed(2)).activity).toBe("active");
     expect(freshness(observed(STALE_AFTER_DAYS + 5)).activity).toBe("stale");
-    expect(freshness(observed(EXPIRES_AFTER_DAYS + 5)).activity).toBe("expired");
+    expect(freshness(observed(EXPIRES_AFTER_DAYS + 5)).activity).toBe(
+      "expired",
+    );
     const withAge = (days: number) =>
       urgency({ ...base, evidence: observed(days) });
     expect(withAge(2)).toBeGreaterThan(withAge(STALE_AFTER_DAYS + 5));
@@ -533,6 +535,23 @@ describe("audit finding 5 — priority queue decomposition", () => {
           }),
         ],
       }),
+      makeAssessment("par-future-only", {
+        evidence: [evidenceRecord("par-ev-future", daysAgo(-180))],
+      }),
+      makeAssessment("par-future-mixed", {
+        evidence: [
+          evidenceRecord("par-ev-future-mixed", daysAgo(-180)),
+          evidenceRecord("par-ev-current-mixed", daysAgo(2)),
+        ],
+      }),
+      makeAssessment("par-offline-secondary-field", {
+        evidence: [
+          evidenceRecord("par-ev-offline-secondary", daysAgo(2), {
+            status: "online",
+            url_status: "offline",
+          }),
+        ],
+      }),
       makeAssessment("par-no-evidence", {
         confidence: 0,
         human_review: true,
@@ -549,7 +568,9 @@ describe("audit finding 5 — priority queue decomposition", () => {
     for (const a of fixtures) await save(p, a);
 
     const rows = await db
-      .prepare(`SELECT id,${urgencySql} AS u FROM assessments WHERE tenant_id=?`)
+      .prepare(
+        `SELECT id,${urgencySql} AS u FROM assessments WHERE tenant_id=?`,
+      )
       .bind(p.tenantId)
       .all<{ id: string; u: number }>();
     expect(rows.results.map((r) => r.id).sort()).toEqual(

@@ -194,6 +194,16 @@ export async function dossier(
       Boolean(sightings.next_cursor),
   };
 }
+export function hasMatchCriteria(criteria: MatchCriteria): boolean {
+  return (
+    Object.values(criteria).some(
+      (value) => Array.isArray(value) && value.length > 0,
+    ) ||
+    criteria.minConfidence > 0 ||
+    Boolean(criteria.from || criteria.to)
+  );
+}
+
 export function criterionMatches(
   criteria: MatchCriteria,
   entity: IntelEntity,
@@ -202,14 +212,36 @@ export function criterionMatches(
   evidence = evidence.filter(
     (e) =>
       e.confidence >= criteria.minConfidence &&
-      (!criteria.from || (e.observedAt ?? e.createdAt) >= criteria.from) &&
-      (!criteria.to || (e.observedAt ?? e.createdAt) <= criteria.to),
+      (!criteria.from ||
+        (e.observedAt !== undefined &&
+          Date.parse(e.observedAt) >= Date.parse(criteria.from))) &&
+      (!criteria.to ||
+        (e.observedAt !== undefined &&
+          Date.parse(e.observedAt) <= Date.parse(criteria.to))),
   );
   const dimensions: {
     name: string;
     matched: boolean;
     evidenceIds: string[];
   }[] = [];
+  if (criteria.minConfidence > 0)
+    dimensions.push({
+      name: "minConfidence",
+      matched: evidence.length > 0,
+      evidenceIds: evidence.map((e) => e.id),
+    });
+  if (criteria.from)
+    dimensions.push({
+      name: "from",
+      matched: evidence.length > 0,
+      evidenceIds: evidence.map((e) => e.id),
+    });
+  if (criteria.to)
+    dimensions.push({
+      name: "to",
+      matched: evidence.length > 0,
+      evidenceIds: evidence.map((e) => e.id),
+    });
   const add = (
     name: string,
     configured: unknown[],
@@ -281,12 +313,7 @@ export function criterionMatches(
   add("sourceIds", criteria.sourceIds, (e) =>
     criteria.sourceIds.includes(e.sourceId),
   );
-  const supported = evidence.filter(
-    (e) =>
-      e.confidence >= criteria.minConfidence &&
-      (!criteria.from || (e.observedAt ?? e.createdAt) >= criteria.from) &&
-      (!criteria.to || (e.observedAt ?? e.createdAt) <= criteria.to),
-  );
+  const supported = evidence;
   const supportedIds = new Set(supported.map((e) => e.id));
   return {
     matches:

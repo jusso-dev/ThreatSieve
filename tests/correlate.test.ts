@@ -487,3 +487,60 @@ describe("migration 0022 backfill", () => {
     }
   });
 });
+
+it("counts distinct observables even when several sources corroborate one member", async () => {
+  const data = { malwareEntityId: "malware-one-observable" };
+  await addObservable("obs-one-member", "one-member.example.test");
+  for (const sourceId of ["src-a", "src-b"]) {
+    await addEvidence({
+      id: "one-member-" + sourceId,
+      observableId: "obs-one-member",
+      type: "malware",
+      sourceId,
+      data,
+      observedAt: T0,
+      confidence: 0.9,
+      createdAt: T0,
+    });
+  }
+  await correlate(repo, "obs-one-member");
+  const id = "cluster_" + (await digest("malware:malware-one-observable"));
+  expect(
+    await db
+      .prepare("SELECT observable_count FROM threat_clusters WHERE id=?")
+      .bind(id)
+      .first(),
+  ).toEqual({ observable_count: 1 });
+  await addObservable("obs-second-member", "second-member.example.test");
+  await addEvidence({
+    id: "second-member-source",
+    observableId: "obs-second-member",
+    type: "malware",
+    sourceId: "src-a",
+    data,
+    observedAt: T0,
+    confidence: 0.9,
+    createdAt: T0,
+  });
+  await correlate(repo, "obs-second-member");
+  expect(
+    await db
+      .prepare("SELECT observable_count FROM threat_clusters WHERE id=?")
+      .bind(id)
+      .first(),
+  ).toEqual({ observable_count: 2 });
+  await db
+    .prepare("UPDATE threat_clusters SET observable_count=99 WHERE id=?")
+    .bind(id)
+    .run();
+  for (const sql of migrationStatements(
+    readFileSync("migrations/0029_cluster_observable_counts.sql", "utf8"),
+  ))
+    await db.prepare(sql).run();
+  expect(
+    await db
+      .prepare("SELECT observable_count FROM threat_clusters WHERE id=?")
+      .bind(id)
+      .first(),
+  ).toEqual({ observable_count: 2 });
+});

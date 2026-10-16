@@ -19,7 +19,7 @@ import { digest } from "../../intel/src/normalise";
 import { freshness } from "../../intel/src/freshness";
 
 export const SCHEMA_VERSION = "observable-v1";
-export const QUESTION_VERSION = "decisions-v1.1.0";
+export const QUESTION_VERSION = "decisions-v1.1.1";
 export const FLASH = "@cf/cloudflare/clef-flash";
 export const FULL = "@cf/cloudflare/clef";
 export type Model = typeof FLASH | typeof FULL;
@@ -236,8 +236,10 @@ export function freshEvidenceGate(
   if (blockAt === -1) return { actions, downgraded: false };
   const reference = Date.parse(options.now ?? new Date().toISOString());
   const nowMs = Number.isNaN(reference) ? Date.now() : reference;
-  const newest = freshness(evidence, options.now).last_observed;
+  const state = freshness(evidence, new Date(nowMs).toISOString());
+  const newest = state.last_observed;
   const fresh =
+    state.activity === "active" &&
     newest !== null &&
     nowMs - Date.parse(newest) <= FRESH_EVIDENCE_DAYS * DAY_MS;
   if (fresh && !options.awaitingReview) return { actions, downgraded: false };
@@ -257,7 +259,10 @@ export function freshEvidenceGate(
   ): Assessment["recommended_actions"][number] =>
     action.reason_codes.includes("FRESH_EVIDENCE_REQUIRED")
       ? action
-      : { ...action, reason_codes: [...action.reason_codes, "FRESH_EVIDENCE_REQUIRED"] };
+      : {
+          ...action,
+          reason_codes: [...action.reason_codes, "FRESH_EVIDENCE_REQUIRED"],
+        };
   const next = actions.map((x, i) =>
     i === blockAt ? replacement : withCode(x),
   );

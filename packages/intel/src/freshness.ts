@@ -67,9 +67,13 @@ export function freshness(
   const nowMs = Number.isNaN(reference) ? Date.now() : reference;
   const observations = evidence
     .map((e) => observedTime(e.observedAt))
-    .filter((t): t is number => t !== null);
-  const firstMs = observations.length ? Math.min(...observations) : null;
-  const lastMs = observations.length ? Math.max(...observations) : null;
+    .filter((t): t is number => t !== null && t <= nowMs);
+  const firstMs = observations.length
+    ? observations.reduce((first, time) => Math.min(first, time))
+    : null;
+  const lastMs = observations.length
+    ? observations.reduce((last, time) => Math.max(last, time))
+    : null;
   // Observation times, normalised to ISO — never `now`, never processing time.
   const first_observed =
     firstMs === null ? null : new Date(firstMs).toISOString();
@@ -81,6 +85,10 @@ export function freshness(
 
   const offline = evidence.some((e) => offlineAtCollection(e.data));
   const undated = evidence.some((e) => observedTime(e.observedAt) === null);
+  const future = evidence.some((e) => {
+    const time = observedTime(e.observedAt);
+    return time !== null && time > nowMs;
+  });
 
   const stale_reasons: string[] = [];
   if (lastMs === null) {
@@ -94,6 +102,7 @@ export function freshness(
     if (undated) stale_reasons.push("EVIDENCE_WITHOUT_OBSERVATION_DATE");
   }
   if (offline) stale_reasons.push("SOURCE_STATUS_OFFLINE_AT_COLLECTION");
+  if (future) stale_reasons.push("FUTURE_OBSERVATION_DATE");
 
   let activity: FreshnessState["activity"] = "unknown";
   if (lastMs !== null) {
@@ -106,7 +115,8 @@ export function freshness(
           : "active";
     // Fail-closed: a source-reported-offline record, or evidence without an
     // observation date, means freshness is not demonstrated — never "active".
-    if (activity === "active" && (offline || undated)) activity = "stale";
+    if (activity === "active" && (offline || undated || future))
+      activity = "stale";
   }
 
   return {

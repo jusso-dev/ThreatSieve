@@ -76,9 +76,10 @@ export const evidenceAbsentPredicate =
 // SQLite rounding ever disagree at a bucket edge.
 // tests/priority-queue.test.ts asserts SQL and TypeScript agree row by row.
 const URGENCY_EVIDENCE = "json_extract(data,'$.evidence')";
-const URGENCY_LAST_OBSERVED_JD = `(SELECT MAX(julianday(json_extract(u_e.value,'$.observedAt'))) FROM json_each(${URGENCY_EVIDENCE}) u_e WHERE julianday(json_extract(u_e.value,'$.observedAt')) IS NOT NULL)`;
+const URGENCY_LAST_OBSERVED_JD = `(SELECT MAX(julianday(json_extract(u_e.value,'$.observedAt'))) FROM json_each(${URGENCY_EVIDENCE}) u_e WHERE julianday(json_extract(u_e.value,'$.observedAt'))<=julianday('now'))`;
 const URGENCY_UNDATED = `EXISTS(SELECT 1 FROM json_each(${URGENCY_EVIDENCE}) u_e WHERE julianday(json_extract(u_e.value,'$.observedAt')) IS NULL)`;
-const URGENCY_OFFLINE = `EXISTS(SELECT 1 FROM json_each(${URGENCY_EVIDENCE}) u_e WHERE trim(lower(COALESCE(json_extract(u_e.value,'$.data.status'),json_extract(u_e.value,'$.data.url_status'),json_extract(u_e.value,'$.data.source_status'),'')))='offline')`;
+const URGENCY_FUTURE = `EXISTS(SELECT 1 FROM json_each(${URGENCY_EVIDENCE}) u_e WHERE julianday(json_extract(u_e.value,'$.observedAt'))>julianday('now'))`;
+const URGENCY_OFFLINE = `EXISTS(SELECT 1 FROM json_each(${URGENCY_EVIDENCE}) u_e WHERE trim(lower(COALESCE(json_extract(u_e.value,'$.data.status'),'')))='offline' OR trim(lower(COALESCE(json_extract(u_e.value,'$.data.url_status'),'')))='offline' OR trim(lower(COALESCE(json_extract(u_e.value,'$.data.source_status'),'')))='offline')`;
 const URGENCY_KEV = `EXISTS(SELECT 1 FROM json_each(${URGENCY_EVIDENCE}) u_e WHERE json_extract(u_e.value,'$.data.kev')=1)`;
 
 // FreshnessState tiers (leaf 1.1.2 policy: stale past 30d, expired past 90d,
@@ -87,7 +88,7 @@ const URGENCY_FRESHNESS_SQL = `(CASE
   WHEN ${URGENCY_LAST_OBSERVED_JD} IS NULL THEN ${URGENCY_UNKNOWN}
   WHEN julianday('now')-${URGENCY_LAST_OBSERVED_JD} > ${EXPIRES_AFTER_DAYS} THEN ${URGENCY_FRESHNESS_ACTIVITY.expired}
   WHEN julianday('now')-${URGENCY_LAST_OBSERVED_JD} > ${STALE_AFTER_DAYS} THEN ${URGENCY_FRESHNESS_ACTIVITY.stale}
-  WHEN ${URGENCY_UNDATED} OR ${URGENCY_OFFLINE} THEN ${URGENCY_FRESHNESS_ACTIVITY.stale}
+  WHEN ${URGENCY_UNDATED} OR ${URGENCY_OFFLINE} OR ${URGENCY_FUTURE} THEN ${URGENCY_FRESHNESS_ACTIVITY.stale}
   ELSE ${URGENCY_FRESHNESS_ACTIVITY.active} END)`;
 
 export const urgencySql = `ROUND(${URGENCY_WEIGHTS.assetImpact}*(0.7*(CASE json_extract(data,'$.customer.priority') WHEN 'critical' THEN ${URGENCY_PRIORITY_IMPACT.critical} WHEN 'high' THEN ${URGENCY_PRIORITY_IMPACT.high} WHEN 'medium' THEN ${URGENCY_PRIORITY_IMPACT.medium} ELSE ${URGENCY_PRIORITY_IMPACT.low} END) + 0.3*MIN(MAX(COALESCE(json_extract(data,'$.customer.exposedAssets'),0),0)/10.0,1.0)) + ${URGENCY_WEIGHTS.exposure}*(0.5*MIN(MAX(COALESCE(json_extract(data,'$.customer.relevance'),0),0),1.0) + 0.5*(CASE WHEN json_extract(data,'$.customer.observed') THEN 1.0 ELSE 0.0 END)) + ${URGENCY_WEIGHTS.freshness}*${URGENCY_FRESHNESS_SQL} + ${URGENCY_WEIGHTS.exploitation}*(CASE WHEN ${URGENCY_KEV} THEN 1.0 ELSE ${URGENCY_UNKNOWN} END) + ${URGENCY_WEIGHTS.evidenceConfidence}*(CASE WHEN ${evidencePresentPredicate} THEN MIN(MAX(COALESCE(json_extract(data,'$.confidence'),0),0),1.0) ELSE ${URGENCY_UNKNOWN} END) + ${URGENCY_WEIGHTS.reviewState}*(CASE WHEN status='confirmed' THEN ${URGENCY_REVIEW_STATE.settled} WHEN human_review=1 OR status='needs-investigation' THEN ${URGENCY_REVIEW_STATE.awaiting_review} ELSE ${URGENCY_REVIEW_STATE.undecided} END), ${URGENCY_ROUND_DIGITS})`;

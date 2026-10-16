@@ -9,6 +9,7 @@ import {
   browseCanonicalEntities,
   canonicalEntities,
   latestAssessmentPerObservable,
+  identityGroup,
   unaliasEntity,
 } from "../packages/database/src/canonical";
 import type {
@@ -141,6 +142,44 @@ function modelAssessment(
     ...overrides,
   };
 }
+
+it("shared source records identify assertions without merging different entity types or different observables", async () => {
+  const record = "shared-association-record";
+  const original = {
+    ...campaign("identity-campaign", "mitre", "MITRE", record),
+    name: "Association identity regression",
+    externalId: "shared-association-external",
+  };
+  await repo.putEntity(original);
+  await repo.putEntity({
+    ...original,
+    id: "identity-malware",
+    type: "malware",
+  });
+  for (const id of ["identity-observable-a", "identity-observable-b"]) {
+    await repo.putObservable(
+      {
+        id,
+        type: "domain",
+        value: id + ".example",
+        normalizedValue: id + ".example",
+        createdAt: original.provenance.retrievedAt,
+        updatedAt: original.provenance.retrievedAt,
+      },
+      original.provenance,
+    );
+  }
+  for (const id of [
+    "identity-campaign",
+    "identity-malware",
+    "identity-observable-a",
+    "identity-observable-b",
+  ]) {
+    expect(
+      (await identityGroup(repo, principal.tenantId, id))?.memberIds,
+    ).toEqual([id]);
+  }
+});
 
 describe("mirrored source assertions (pure)", () => {
   it("shared upstream record id marks redistributors mirrored and excludes them from independent count", () => {
@@ -303,11 +342,9 @@ describe("latest assessment per observable + reversible alias", () => {
     await repo.saveAssessment(principal.tenantId, first, []);
     await repo.saveAssessment(principal.tenantId, second, []);
 
-    const page = await latestAssessmentPerObservable(
-      repo,
-      principal.tenantId,
-      { includeHistory: true },
-    );
+    const page = await latestAssessmentPerObservable(repo, principal.tenantId, {
+      includeHistory: true,
+    });
     const cveSlots = page.data.filter((s) => s.observable.id === obsId);
     expect(cveSlots).toHaveLength(1);
     expect(cveSlots[0]!.assessment_id).toBe("assess-cve-2");
@@ -602,7 +639,9 @@ describe("tenant visibility: private peers must not leak", () => {
     expect(forA!.member_ids).not.toContain(privateCamp.id);
     expect(forA!.canonical_id).not.toBe(privateCamp.id);
     expect(
-      forA!.source_assertions.some((s) => s.sourceName === "Tenant B Secret Feed"),
+      forA!.source_assertions.some(
+        (s) => s.sourceName === "Tenant B Secret Feed",
+      ),
     ).toBe(false);
     expect(JSON.stringify(forA)).not.toContain("Tenant B Secret Feed");
     expect(JSON.stringify(forA)).not.toContain(privateCamp.id);
@@ -622,9 +661,13 @@ describe("tenant visibility: private peers must not leak", () => {
     expect(forB!.member_ids).toContain(publicCamp.id);
     expect(forB!.member_ids).toContain(privateCamp.id);
     expect(
-      forB!.source_assertions.some((s) => s.sourceName === "Tenant B Secret Feed"),
+      forB!.source_assertions.some(
+        (s) => s.sourceName === "Tenant B Secret Feed",
+      ),
     ).toBe(true);
 
-    expect(await canonicalEntities(repo, "tenant-a-vis", privateCamp.id)).toBeNull();
+    expect(
+      await canonicalEntities(repo, "tenant-a-vis", privateCamp.id),
+    ).toBeNull();
   });
 });

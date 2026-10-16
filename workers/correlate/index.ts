@@ -1,6 +1,7 @@
 import { Repository } from "../../packages/database/src/repository";
 import { digest } from "../../packages/intel/src/normalise";
 import { EvidenceSchema } from "../../packages/schemas/src/index";
+import { freshness } from "../../packages/intel/src/freshness";
 import type { Evidence } from "../../packages/schemas/src/index";
 
 /**
@@ -127,12 +128,9 @@ export async function correlate(repo: Repository, observableId: string) {
     const members = [...seen.values()];
     // Observation bounds come from evidence observedAt only: unknown stays
     // unknown (null), never falling back to processing time.
-    const observed = members
-      .map((m) => m.observedAt)
-      .filter((t): t is string => typeof t === "string")
-      .sort();
-    const firstObserved = observed[0] ?? null;
-    const lastObserved = observed.at(-1) ?? null;
+    const observed = freshness(members, now);
+    const firstObserved = observed.first_observed;
+    const lastObserved = observed.last_observed;
     const confidence = evidenceWeightedConfidence(
       members.map((m) => m.confidence),
     );
@@ -178,7 +176,7 @@ export async function correlate(repo: Repository, observableId: string) {
       ),
       repo.db
         .prepare(
-          "UPDATE threat_clusters SET observable_count=(SELECT COUNT(*) FROM cluster_members WHERE cluster_id=?) WHERE id=?",
+          "UPDATE threat_clusters SET observable_count=(SELECT COUNT(DISTINCT observable_id) FROM cluster_members WHERE cluster_id=?) WHERE id=?",
         )
         .bind(id, id),
     ]);

@@ -35,6 +35,81 @@ beforeAll(async () => {
 afterAll(async () => {
   await mf?.dispose();
 });
+
+it("alias resolution preserves all lookup paths, deduplicates matches and filters type before limiting", async () => {
+  const candidates: IntelEntity[] = Array.from({ length: 5 }, (_, i) => ({
+    id: "cost-lookup-" + i,
+    type: i === 4 ? "threat-actor" : "malware",
+    name: i === 2 ? "Cost Lookup" : "Cost candidate " + i,
+    externalId: i === 1 || i === 3 ? "Cost Lookup" : undefined,
+    aliases: i === 0 || i === 3 || i === 4 ? ["Cost Lookup"] : [],
+    description: "Synthetic indexed lookup test",
+    data: {},
+    provenance: {
+      sourceId: "mitre",
+      sourceName: "MITRE ATT&CK",
+      retrievedAt: new Date().toISOString(),
+      redistributable: true,
+    },
+  }));
+  for (const entity of candidates) await repo.putEntity(entity);
+  // Exercise the name branch independently of the alias added by putEntity.
+  await repo.db
+    .prepare("DELETE FROM entity_aliases WHERE entity_id=?")
+    .bind("cost-lookup-2")
+    .run();
+  const actor = await repo.resolveAlias("Cost Lookup", "threat-actor");
+  expect(actor.map((entity) => entity.id)).toEqual(["cost-lookup-4"]);
+  const malware = await repo.resolveAlias("Cost Lookup", "malware");
+  expect(malware).toHaveLength(3);
+  expect(new Set(malware.map((entity) => entity.id)).size).toBe(3);
+  expect(malware.every((entity) => entity.type === "malware")).toBe(true);
+  expect(
+    (await repo.resolveAlias("cost lookup", "malware")).map((e) => e.id),
+  ).toContain("cost-lookup-2");
+  expect(await repo.resolveAlias("missing-cost-lookup")).toEqual([]);
+});
+
+it("alias resolution uses indexed searches for aliases, external IDs and normalized names", async () => {
+  let sql = "";
+  const instrumented = new Repository(
+    new Proxy(repo.db, {
+      get(target, property) {
+        if (property === "prepare")
+          return (query: string) => {
+            sql = query;
+            return target.prepare(query);
+          };
+        return Reflect.get(target, property);
+      },
+    }),
+  );
+  await instrumented.resolveAlias("missing-cost-lookup");
+  const plan = await repo.db
+    .prepare("EXPLAIN QUERY PLAN " + sql)
+    .bind(
+      "missing-cost-lookup",
+      "missing-cost-lookup",
+      "missing-cost-lookup",
+      null,
+      null,
+    )
+    .all<{ detail: string }>();
+  expect(
+    plan.results.some((row) =>
+      /SCAN (e|entities|a|entity_aliases)\b/.test(row.detail),
+    ),
+  ).toBe(false);
+  expect(
+    plan.results.some((row) => /entities_lower_name_lookup/.test(row.detail)),
+  ).toBe(true);
+  expect(plan.results.some((row) => /entities_external/.test(row.detail))).toBe(
+    true,
+  );
+  expect(
+    plan.results.some((row) => /SEARCH entity_aliases/.test(row.detail)),
+  ).toBe(true);
+});
 it.each([
   ["vulnerability", "CVE-2026-99998"],
   ["attack-technique", "T9998"],

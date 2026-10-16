@@ -38,6 +38,14 @@ Generate the deployment config first with the deployment script's config-only mo
 
 Existing installations must apply all migrations through `0021_outbox_dispatch_token.sql` before running this release. This release also applies `0022_entity_source_record_lookup.sql`, `0024_matching_state.sql`, `0025_canonical_aliases.sql`, and `0026_cluster_observation.sql`. There is no `0023`. `0026` rebuilds `threat_clusters` and `cluster_members`; record a D1 Time Travel bookmark before applying it. Migration 0008 adds personal saved views and browsing/sorting indexes without changing existing intelligence. Migration 0006 preserves existing users, tenant IDs and memberships while adding Better Auth tables; migration 0007 protects the final admin with D1 triggers. Migration 0005 preserves legacy exports and adds assessment revisions. Local `pnpm db:migrate` applies these to the development database.
 
+Migration `0027_cost_lookup_indexes.sql` adds indexes for normalized entity names and unfinished feed roots. Apply it before releasing the indexed alias lookup and bounded pending-job checks. Verify `EXPLAIN QUERY PLAN` for the feed finalization and outbox acknowledgement/cleanup queries; they must use the relevant indexes rather than scan historical jobs or deliveries.
+
+The efficacy sweep additionally requires migrations 0028–0030. Migration 0028 adds indexes for upstream identity searches, latest graph feedback, dossier change history and populated cluster browsing. Migration 0029 corrects historical observable counts using distinct member identifiers without deleting intelligence or evidence. Migration 0030 ensures observation-date and confidence updates reach subscriptions while collection/archive metadata alone does not create another change event. Record a Time Travel bookmark, inspect the SQL, and apply these as a separate database release step before the corresponding application release.
+
+Refresh enabled optional feeds following release so previously stored observations reflect the corrected source-date policy.
+
+The 16 October 2026 cost repair applied migrations 0019–0021 and 0027 to staging, which had stopped at 0018. The same live feed-polling query fell from 493,652 rows read to two, and both outbox updates now use `outbox_dispatch_token`. Production already had migration 0021. Staging migrations 0022 and 0024–0026 were not applied as part of the index repair; apply and review those separately before deploying application code that depends on them. The full staging migration set includes a cluster-table rebuild, so do not treat a blanket migration apply as an index-only repair.
+
 ## Release
 
 ```sh
