@@ -60,6 +60,17 @@ export async function ingestRecord(
       await repo.putRelationship(relation);
     }
   }
-  for (const r of record.relationships) await repo.putRelationship(r);
+  for (const r of record.relationships)
+    await repo.putRelationship({
+      ...r,
+      sourceEntityId:
+        record.entity && r.sourceEntityId === record.entity.id
+          ? (id ?? r.sourceEntityId)
+          : r.sourceEntityId,
+      targetEntityId:
+        record.entity && r.targetEntityId === record.entity.id
+          ? (id ?? r.targetEntityId)
+          : r.targetEntityId,
+    });
   return id;
 }

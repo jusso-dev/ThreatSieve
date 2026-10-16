@@ -38,3 +38,19 @@ it("requires an existing candidate and evidence references for actor evaluation"
   d.cases[0]!.category = "actor";
   expect(EvaluationDataset.safeParse(d).success).toBe(false);
 });
+
+it("requires sampling documentation and held-out data for analyst-labelled claims", async () => {
+  const d = { ...(await example()), kind: "analyst-labelled" };
+  expect(EvaluationDataset.safeParse(d).success).toBe(false);
+  expect(
+    EvaluationDataset.safeParse({
+      ...d,
+      sampling: {
+        population: "Independent analyst-reviewed observations",
+        method: "Random sample stratified by source and time",
+        exclusions: "Duplicate source reports excluded from sampling",
+        heldOut: true,
+      },
+    }).success,
+  ).toBe(true);
+});

@@ -90,8 +90,10 @@ export function operationalAlerts(
   now = Date.now(),
 ): OperationalAlert[] {
   const alerts: OperationalAlert[] = [];
-  const age = (at: string | null) =>
-    at ? Math.max(0, now - Date.parse(at)) : Infinity;
+  const age = (at: string | null) => {
+    const parsed = at ? Date.parse(at) : NaN;
+    return Number.isFinite(parsed) && parsed <= now ? now - parsed : Infinity;
+  };
   const add = (
     code: string,
     severity: OperationalAlert["severity"],
@@ -159,7 +161,11 @@ export function operationalAlerts(
   for (const j of report.jobs)
     if ((j.status === "complete" || j.status === "running") && j.latest) {
       const at = Date.parse(j.latest);
-      if (at > (lastProgress.get(j.stage) ?? -Infinity))
+      if (
+        Number.isFinite(at) &&
+        at <= now &&
+        at > (lastProgress.get(j.stage) ?? -Infinity)
+      )
         lastProgress.set(j.stage, at);
     }
   const lagging = new Map<string, number>();
@@ -218,7 +224,9 @@ export function operationalAlerts(
         "OUTBOX_LAG",
         "critical",
         "outbox",
-        "Unpublished work has waited longer than 10 minutes and nothing was published in 10 minutes.",
+        age(report.outbox.oldest) > PIPELINE_BACKLOG_MAX_MS
+          ? "Unpublished backlog has not drained within one feed cycle."
+          : "Unpublished work has waited longer than 10 minutes and nothing was published in 10 minutes.",
       );
     else
       add(
@@ -284,9 +292,9 @@ export async function operationalReport(
       .bind(tenant)
       .first<{ pending: number; oldest: string | null }>(),
     env.DB.prepare(
-      "SELECT MAX(dispatched_at) AS last_dispatch FROM outbox WHERE dispatched_at>=?",
+      "SELECT MAX(o.dispatched_at) AS last_dispatch FROM outbox o JOIN pipeline_jobs p ON p.id=o.id WHERE o.dispatched_at>=? AND (p.tenant_id=? OR p.tenant_id IS NULL)",
     )
-      .bind(new Date(now.getTime() - PIPELINE_BACKLOG_MAX_MS).toISOString())
+      .bind(new Date(now.getTime() - OUTBOX_STALL_MS).toISOString(), tenant)
       .first<{ last_dispatch: string | null }>(),
     env.DB.prepare(
       "SELECT COALESCE((SELECT count FROM inference_budget WHERE tenant_id=? AND day=?),0) AS calls,COALESCE((SELECT SUM(input_tokens) FROM classification_runs WHERE tenant_id=? AND created_at>=?),0) AS input_tokens",

@@ -2,6 +2,17 @@
 
 Confidence is a policy calculation with visible factors. It is distinct from Clef's raw probability of maliciousness.
 
+Source independence uses one shared policy across classifier confidence, dossier
+scores and canonical views. Provider-local record IDs are scoped by provider;
+explicit `sourceRecordNamespace` identifies shared upstream records and
+`originalSourceId` identifies a producer behind a redistributor. Connected groups
+collapse configured provider groups, shared original producers and declared
+mirrors, so redistribution cannot increase corroboration. Disabled tenant sources
+are excluded from canonical assertion counts. Recognised CVE and ATT&CK external
+IDs remain global; other external IDs are scoped by their source namespace.
+Decision version `decisions-v1.1.2` invalidates cached confidence from the previous
+independence policy. Thresholds and weights are unchanged.
+
 ## Definitions
 
 Every number shown in the UI is one of the quantities below. They are not interchangeable: a model probability, a composite confidence, a model self-assessment and a heuristic weight sum answer different questions.

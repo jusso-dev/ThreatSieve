@@ -35,7 +35,14 @@ import {
 } from "./decision-state";
 import { AssessmentFilters, EntityFilters } from "../../schemas/src/query";
 export class Repository {
-  constructor(readonly db: D1Database) {}
+  constructor(
+    readonly db: D1Database,
+    readonly pendingWrites?: D1PreparedStatement[],
+  ) {}
+  private async write(statements: D1PreparedStatement[]) {
+    if (this.pendingWrites) this.pendingWrites.push(...statements);
+    else await this.db.batch(statements);
+  }
   async observable(id: string) {
     const r = await this.db
       .prepare("SELECT data FROM observables WHERE id=?")
@@ -83,13 +90,15 @@ export class Repository {
     return [
       this.db
         .prepare(
-          "INSERT INTO entity_sources VALUES(?,?,?,?) ON CONFLICT(entity_id,source_id,source_record_id) DO UPDATE SET provenance=excluded.provenance",
+          "INSERT INTO entity_sources(entity_id,source_id,source_record_id,provenance,record_namespace,original_source_id) VALUES(?,?,?,?,?,?) ON CONFLICT(entity_id,source_id,record_namespace,source_record_id) DO UPDATE SET provenance=excluded.provenance,record_namespace=excluded.record_namespace,original_source_id=excluded.original_source_id",
         )
         .bind(
           e.id,
           e.provenance.sourceId,
           e.provenance.sourceRecordId ?? e.id,
           JSON.stringify(e.provenance),
+          e.provenance.sourceRecordNamespace ?? e.provenance.sourceId,
+          e.provenance.originalSourceId ?? e.provenance.sourceId,
         ),
       ...[e.name, ...e.aliases].map((a) =>
         this.db
@@ -128,7 +137,7 @@ export class Repository {
   }
   // Records a secondary source on an existing entity without replacing its data.
   async attachSource(entityId: string, e: IntelEntity) {
-    await this.db.batch([
+    await this.write([
       ...this.sourceStatements({
         ...e,
         id: entityId,
@@ -204,7 +213,7 @@ export class Repository {
             typeof e.data.dueDate === "string" ? e.data.dueDate : null,
           ),
       );
-    await this.db.batch(statements);
+    await this.write(statements);
   }
   async putObservable(
     o: Observable,
@@ -214,10 +223,11 @@ export class Repository {
     const previous = await this.observable(o.id);
     if (previous && ["upload", "customer"].includes(provenance.sourceId)) {
       if (tenantId)
-        await this.db
-          .prepare("INSERT OR IGNORE INTO tenant_observables VALUES(?,?,?)")
-          .bind(tenantId, o.id, new Date().toISOString())
-          .run();
+        await this.write([
+          this.db
+            .prepare("INSERT OR IGNORE INTO tenant_observables VALUES(?,?,?)")
+            .bind(tenantId, o.id, new Date().toISOString()),
+        ]);
       return;
     }
 
@@ -236,7 +246,7 @@ export class Repository {
       data: { observableType: o.type },
       provenance,
     };
-    await this.db.batch([
+    await this.write([
       ...this.entityStatements(e),
       this.db
         .prepare(
@@ -260,20 +270,21 @@ export class Repository {
     ]);
   }
   async putEvidence(entityId: string, e: Evidence) {
-    await this.db
-      .prepare(
-        "INSERT INTO evidence(id,entity_id,source_id,data,raw_key,observed_at,created_at) VALUES(?,?,?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET data=excluded.data,raw_key=excluded.raw_key,observed_at=excluded.observed_at",
-      )
-      .bind(
-        e.id,
-        entityId,
-        e.sourceId,
-        JSON.stringify(e),
-        e.rawKey ?? null,
-        e.observedAt ?? null,
-        e.createdAt,
-      )
-      .run();
+    await this.write([
+      this.db
+        .prepare(
+          "INSERT INTO evidence(id,entity_id,source_id,data,raw_key,observed_at,created_at) VALUES(?,?,?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET data=excluded.data,raw_key=excluded.raw_key,observed_at=excluded.observed_at",
+        )
+        .bind(
+          e.id,
+          entityId,
+          e.sourceId,
+          JSON.stringify(e),
+          e.rawKey ?? null,
+          e.observedAt ?? null,
+          e.createdAt,
+        ),
+    ]);
   }
   async evidence(entityId: string, limit = 100, tenantId?: string) {
     const rows = await this.db
@@ -288,9 +299,14 @@ export class Repository {
     // Resolve producer IDs already attached to canonical CVE / ATT&CK entities.
     const endpoints = await this.db
       .prepare(
-        "SELECT source_record_id,entity_id FROM entity_sources WHERE source_id=? AND source_record_id IN (?,?)",
+        "SELECT source_record_id,entity_id FROM entity_sources WHERE source_id=? AND record_namespace=? AND source_record_id IN (?,?)",
       )
-      .bind(r.provenance.sourceId, r.sourceEntityId, r.targetEntityId)
+      .bind(
+        r.provenance.sourceId,
+        r.provenance.sourceRecordNamespace ?? r.provenance.sourceId,
+        r.sourceEntityId,
+        r.targetEntityId,
+      )
       .all<{ source_record_id: string; entity_id: string }>();
     const canonical = new Map(
       endpoints.results.map((e) => [e.source_record_id, e.entity_id]),
@@ -322,7 +338,7 @@ export class Repository {
         provenance: { ...r.provenance, retrievedAt: undefined },
       }),
     );
-    await this.db.batch([
+    await this.write([
       this.db
         .prepare(
           "INSERT OR IGNORE INTO relationship_assertions VALUES(?,?,?,?,?)",
@@ -713,6 +729,7 @@ export class Repository {
   jobStatements(
     job: PipelineJob,
     gate: {
+      guard?: { sql: string; bindings: (string | number | null)[] };
       feedbackId?: string;
       requestKey?: string;
       delivery?: { id: string; generation: number };
@@ -724,7 +741,8 @@ export class Repository {
     return [
       this.db
         .prepare(
-          "INSERT OR IGNORE INTO pipeline_jobs(id,tenant_id,entity_id,stage,status,data,created_at,updated_at) SELECT ?,?,?,?,'queued',?,?,? WHERE (? IS NULL OR EXISTS(SELECT 1 FROM analyst_feedback WHERE id=?)) AND (? IS NULL OR EXISTS(SELECT 1 FROM request_idempotency WHERE tenant_id=? AND request_key=? AND job_id=?)) AND (? IS NULL OR EXISTS(SELECT 1 FROM pipeline_jobs WHERE id=? AND status='complete' AND COALESCE(json_extract(data,'$.generation'),0)=?))",
+          "INSERT OR IGNORE INTO pipeline_jobs(id,tenant_id,entity_id,stage,status,data,created_at,updated_at) SELECT ?,?,?,?,'queued',?,?,? WHERE (? IS NULL OR EXISTS(SELECT 1 FROM analyst_feedback WHERE id=?)) AND (? IS NULL OR EXISTS(SELECT 1 FROM request_idempotency WHERE tenant_id=? AND request_key=? AND job_id=?)) AND (? IS NULL OR EXISTS(SELECT 1 FROM pipeline_jobs WHERE id=? AND status='complete' AND COALESCE(json_extract(data,'$.generation'),0)=?))" +
+            (gate.guard ? " AND (" + gate.guard.sql + ")" : ""),
         )
         .bind(
           job.jobId,
@@ -743,10 +761,12 @@ export class Repository {
           gate.delivery?.id ?? null,
           gate.delivery?.id ?? null,
           gate.delivery?.generation ?? 0,
+          ...(gate.guard?.bindings ?? []),
         ),
       this.db
         .prepare(
-          "INSERT OR IGNORE INTO outbox(id,queue,data,created_at) SELECT ?,?,?,? WHERE (? IS NULL OR EXISTS(SELECT 1 FROM analyst_feedback WHERE id=?)) AND (? IS NULL OR EXISTS(SELECT 1 FROM request_idempotency WHERE tenant_id=? AND request_key=? AND job_id=?)) AND (? IS NULL OR EXISTS(SELECT 1 FROM pipeline_jobs WHERE id=? AND status='complete' AND COALESCE(json_extract(data,'$.generation'),0)=?))",
+          "INSERT OR IGNORE INTO outbox(id,queue,data,created_at) SELECT ?,?,?,? WHERE (? IS NULL OR EXISTS(SELECT 1 FROM analyst_feedback WHERE id=?)) AND (? IS NULL OR EXISTS(SELECT 1 FROM request_idempotency WHERE tenant_id=? AND request_key=? AND job_id=?)) AND (? IS NULL OR EXISTS(SELECT 1 FROM pipeline_jobs WHERE id=? AND status='complete' AND COALESCE(json_extract(data,'$.generation'),0)=?))" +
+            (gate.guard ? " AND (" + gate.guard.sql + ")" : ""),
         )
         .bind(
           job.jobId,
@@ -762,6 +782,7 @@ export class Repository {
           gate.delivery?.id ?? null,
           gate.delivery?.id ?? null,
           gate.delivery?.generation ?? 0,
+          ...(gate.guard?.bindings ?? []),
         ),
     ];
   }

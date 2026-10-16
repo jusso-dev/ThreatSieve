@@ -620,7 +620,12 @@ it("deduplicates concurrent upload requests, rejects body conflicts, and scopes 
   );
   expect(other.job_id).not.toBe(results[0]!.job_id);
   const objects = await archive.list({ prefix: "uploads/" });
-  expect(objects.objects.length).toBe(2);
+  expect(
+    objects.objects.filter((o) => !o.key.includes("/pages/")),
+  ).toHaveLength(2);
+  expect(objects.objects.filter((o) => o.key.includes("/pages/"))).toHaveLength(
+    2,
+  );
 });
 it("retains unresolved reviews and pages beyond the first 50 tenant assessments", async () => {
   const base = (await repo.assessments("tenant-a"))[0]!;

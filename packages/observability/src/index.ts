@@ -35,5 +35,17 @@ export function errorType(error: unknown) {
   }
   if (/subrequest.*limit|too many subrequests/i.test(error.message))
     return "SubrequestLimit";
+  if (error.name === "TimeoutError" || /timeout|timed out/i.test(error.message))
+    return "UpstreamTimeout";
+  if (error.name === "AbortError") return "UpstreamAborted";
+  if (/credential required/i.test(error.message))
+    return "FeedCredentialsMissing";
+  if (/upstream HTTP (401|403)\b/i.test(error.message))
+    return "UpstreamAccessDenied";
+  if (/upstream HTTP 429\b/i.test(error.message)) return "UpstreamRateLimited";
+  if (/upstream HTTP 5\d\d\b/i.test(error.message))
+    return "UpstreamUnavailable";
+  if (/network|fetch failed|ECONNRESET|ENOTFOUND/i.test(error.message))
+    return "UpstreamNetwork";
   return error.constructor.name;
 }

@@ -1,3 +1,4 @@
+import { independentSourceCount } from "./independence";
 import type {
   ConfidenceFactor,
   EvidenceBundle,
@@ -26,12 +27,9 @@ export function scoreConfidence(
   ) => factors.push({ code, value, weight, evidenceIds: ids });
   const ev = bundle.evidence;
   const ids = ev.map((e) => e.id);
-  const groups = new Set(
-    ev.map(
-      (e) =>
-        sources.find((s) => s.id === e.sourceId)?.independent_group ??
-        e.sourceId,
-    ),
+  const groupCount = independentSourceCount(
+    ev.map((e) => e.provenance),
+    sources,
   );
   const reliability = ev.length
     ? ev.reduce(
@@ -56,12 +54,12 @@ export function scoreConfidence(
   // single independent group gets SINGLE_SOURCE_SUPPORT; no source at all is
   // LOW_EVIDENCE (never "confirmation").
   add(
-    groups.size > 1
+    groupCount > 1
       ? "MULTI_SOURCE_CONFIRMATION"
-      : groups.size > 0
+      : groupCount > 0
         ? "SINGLE_SOURCE_SUPPORT"
         : "LOW_EVIDENCE",
-    Math.min(groups.size / 3, 1),
+    Math.min(groupCount / 3, 1),
     0.15,
     ids,
   );
@@ -75,7 +73,12 @@ export function scoreConfidence(
   const direct = ev.filter((e) =>
     ["telemetry", "sandbox", "analyst"].includes(e.type),
   );
-  add("DIRECT_EVIDENCE", direct.length ? 1 : 0, 0.1, direct.map((e) => e.id));
+  add(
+    "DIRECT_EVIDENCE",
+    direct.length ? 1 : 0,
+    0.1,
+    direct.map((e) => e.id),
+  );
   const stale = ev.filter(
     (e) => e.observedAt && now - Date.parse(e.observedAt) > 30 * 86400000,
   );
@@ -97,7 +100,7 @@ export function scoreConfidence(
   return {
     confidence: clamp(factors.reduce((sum, f) => sum + f.value * f.weight, 0)),
     factors,
-    independentSources: groups.size,
+    independentSources: groupCount,
     conflicting,
   };
 }

@@ -492,7 +492,7 @@ app.get("/v1/jobs/:id", scope("assessment:read"), async (c) => {
     (row) => row.status === "queued" || row.status === "running",
   );
   const failed = counts.results.some((row) => row.status === "failed");
-  // Cumulative diagnostics live on each bulk page result (payload-carried).
+  // Cumulative diagnostics are snapshots of durable per-input outcomes.
   // Pick the furthest page by processed — do not SUM cumulative pages.
   const bulkRows = await c.env.DB.prepare(
     "SELECT result FROM pipeline_jobs WHERE tenant_id=? AND stage='bulk' AND (json_extract(data,'$.payload.bulkId')=? OR json_extract(data,'$.payload.rootId')=? OR id=?)",

@@ -9,6 +9,12 @@ import { AssessmentFilters, EntityFilters } from "../../schemas/src/query";
 import { AppError } from "../../observability/src/index";
 import { encodeAssessmentCursor } from "./assessment-query";
 
+import {
+  upstreamIdentity,
+  independentSourceCount,
+  type IndependencePolicy,
+} from "../../scoring/src/independence";
+
 export type SourceAssertion = SourceProvenance & {
   mirrored: boolean;
 };
@@ -31,18 +37,22 @@ export type AssessmentSlot = Assessment & {
 
 /** Upstream key used to detect redistributed mirrors of the same record. */
 function upstreamKey(p: SourceProvenance, index: number): string {
-  if (p.sourceRecordId) return "record:" + p.sourceRecordId;
+  const identity = upstreamIdentity(p);
+  if (identity) return "record:" + identity;
   return "unique:" + p.sourceId + ":" + index;
 }
 
 /**
  * Flag mirrored source assertions and compute independent corroboration.
- * Assertions that share an upstream sourceRecordId/report id form one group:
+ * Assertions sharing an explicit namespace and upstream record form one group:
  * one primary stays mirrored:false (stable: lowest sourceId), the rest are
- * mirrored:true. Independent corroboration equals the number of non-mirrored
- * assertions — mirrors never increment it.
+ * mirrored:true. Independent credit also collapses configured provider groups
+ * and declared original producers; mirrors never increment it.
  */
-export function annotateMirroredAssertions(provenances: SourceProvenance[]): {
+export function annotateMirroredAssertions(
+  provenances: SourceProvenance[],
+  policies: IndependencePolicy[] = [],
+): {
   assertions: SourceAssertion[];
   source_count: number;
   mirror_count: number;
@@ -75,7 +85,10 @@ export function annotateMirroredAssertions(provenances: SourceProvenance[]): {
     assertions,
     source_count: assertions.length,
     mirror_count,
-    independent_corroboration_count: assertions.length - mirror_count,
+    independent_corroboration_count: independentSourceCount(
+      provenances,
+      policies,
+    ),
   };
 }
 
@@ -128,19 +141,34 @@ export async function identityGroup(
       }
     }
     const ent = await db
-      .prepare("SELECT external_id,type FROM entities WHERE id=?")
+      .prepare("SELECT external_id,type,data FROM entities WHERE id=?")
       .bind(id)
-      .first<{ external_id: string | null; type: string }>();
+      .first<{ external_id: string | null; type: string; data: string }>();
     if (!ent) continue;
     const ext = ent?.external_id?.trim();
-    const externalKey = ent.type + ":" + ext;
+    const p = (JSON.parse(ent.data) as IntelEntity).provenance;
+    const namespace = p.sourceRecordNamespace ?? p.sourceId;
+    const globalExternal = Boolean(
+      ext &&
+      ((ent.type === "vulnerability" && /^CVE-\d{4}-\d{4,}$/.test(ext)) ||
+        (ent.type === "attack-technique" && /^T\d{4}(\.\d{3})?$/.test(ext)) ||
+        (ent.type === "attack-tactic" && /^TA\d{4}$/.test(ext)) ||
+        (ent.type === "threat-actor" && /^G\d{4}$/.test(ext)) ||
+        (["malware", "tool"].includes(ent.type) && /^S\d{4}$/.test(ext)) ||
+        (ent.type === "campaign" && /^C\d{4}$/.test(ext))),
+    );
+    const externalKey = JSON.stringify([
+      ent.type,
+      globalExternal ? "global" : namespace,
+      ext,
+    ]);
     if (ext && !seenExt.has(externalKey)) {
       seenExt.add(externalKey);
       const peers = await db
         .prepare(
-          "SELECT id FROM entities WHERE external_id=? AND type=? AND length(trim(external_id))>0 AND (type!='observable' OR id=?)",
+          "SELECT id FROM entities WHERE external_id=? AND type=? AND length(trim(external_id))>0 AND (type!='observable' OR id=?) AND (?=1 OR COALESCE(json_extract(data,'$.provenance.sourceRecordNamespace'),json_extract(data,'$.provenance.sourceId'))=?)",
         )
-        .bind(ext, ent.type, id)
+        .bind(ext, ent.type, id, Number(globalExternal), namespace)
         .all<{ id: string }>();
       for (const p of peers.results) {
         if (!discovered.has(p.id)) {
@@ -151,19 +179,19 @@ export async function identityGroup(
     }
     const records = await db
       .prepare(
-        "SELECT DISTINCT source_record_id AS rid FROM entity_sources WHERE entity_id=? AND length(trim(source_record_id))>0",
+        "SELECT DISTINCT source_record_id AS rid,record_namespace AS namespace FROM entity_sources WHERE entity_id=? AND length(trim(source_record_id))>0",
       )
       .bind(id)
-      .all<{ rid: string }>();
-    for (const { rid } of records.results) {
-      const recordKey = ent.type + ":" + rid;
+      .all<{ rid: string; namespace: string }>();
+    for (const { rid, namespace } of records.results) {
+      const recordKey = JSON.stringify([ent.type, namespace, rid]);
       if (!rid || seenRec.has(recordKey)) continue;
       seenRec.add(recordKey);
       const peers = await db
         .prepare(
-          "SELECT DISTINCT s.entity_id AS id FROM entity_sources s JOIN entities e ON e.id=s.entity_id WHERE s.source_record_id=? AND e.type=? AND (e.type!='observable' OR e.id=?)",
+          "SELECT DISTINCT s.entity_id AS id FROM entity_sources s JOIN entities e ON e.id=s.entity_id WHERE s.record_namespace=? AND s.source_record_id=? AND e.type=? AND (e.type!='observable' OR e.id=?)",
         )
-        .bind(rid, ent.type, id)
+        .bind(namespace, rid, ent.type, id)
         .all<{ id: string }>();
       for (const p of peers.results) {
         if (!discovered.has(p.id)) {
@@ -290,20 +318,21 @@ async function loadAliasIds(
 async function loadProvenances(
   db: D1Database,
   entityIds: string[],
+  tenantId: string,
 ): Promise<SourceProvenance[]> {
   if (!entityIds.length) return [];
   const placeholders = entityIds.map(() => "?").join(",");
   const rows = await db
     .prepare(
-      `SELECT provenance FROM entity_sources WHERE entity_id IN (${placeholders}) ORDER BY source_id,source_record_id`,
+      `SELECT provenance FROM entity_sources WHERE entity_id IN (${placeholders}) AND NOT EXISTS(SELECT 1 FROM tenant_source_policy p WHERE p.tenant_id=? AND p.source_id=entity_sources.source_id AND p.enabled=0) ORDER BY source_id,source_record_id`,
     )
-    .bind(...entityIds)
+    .bind(...entityIds, tenantId)
     .all<{ provenance: string }>();
   const seen = new Set<string>();
   const out: SourceProvenance[] = [];
   for (const row of rows.results) {
     const p = JSON.parse(row.provenance) as SourceProvenance;
-    const key = p.sourceId + "\0" + (p.sourceRecordId ?? "");
+    const key = JSON.stringify([p.sourceId, upstreamIdentity(p)]);
     if (seen.has(key)) continue;
     seen.add(key);
     out.push(p);
@@ -327,8 +356,11 @@ export async function canonicalEntities(
   if (!group) return null;
   const entity = await repo.entity(group.canonicalId);
   if (!entity) return null;
-  const provenances = await loadProvenances(repo.db, group.memberIds);
-  const annotated = annotateMirroredAssertions(provenances);
+  const provenances = await loadProvenances(repo.db, group.memberIds, tenantId);
+  const policies = await repo.db
+    .prepare("SELECT id,independent_group FROM sources")
+    .all<IndependencePolicy>();
+  const annotated = annotateMirroredAssertions(provenances, policies.results);
   return {
     entity,
     canonical_id: group.canonicalId,
@@ -352,8 +384,11 @@ export async function lineageSummary(
 } | null> {
   const group = await identityGroup(repo, tenantId, entityId);
   if (!group) return null;
-  const provenances = await loadProvenances(repo.db, group.memberIds);
-  const annotated = annotateMirroredAssertions(provenances);
+  const provenances = await loadProvenances(repo.db, group.memberIds, tenantId);
+  const policies = await repo.db
+    .prepare("SELECT id,independent_group FROM sources")
+    .all<IndependencePolicy>();
+  const annotated = annotateMirroredAssertions(provenances, policies.results);
   return {
     source_count: annotated.source_count,
     mirror_count: annotated.mirror_count,
@@ -372,6 +407,9 @@ export async function browseCanonicalEntities(
   input: Partial<EntityFilters> = {},
 ) {
   const filters = EntityFilters.parse(input);
+  const policies = await repo.db
+    .prepare("SELECT id,independent_group FROM sources")
+    .all<IndependencePolicy>();
   const collapsed: Array<
     IntelEntity & {
       source_count: number;
@@ -407,8 +445,15 @@ export async function browseCanonicalEntities(
         group.canonicalId === e.id
           ? e
           : ((await repo.entity(group.canonicalId)) ?? e);
-      const provenances = await loadProvenances(repo.db, group.memberIds);
-      const annotated = annotateMirroredAssertions(provenances);
+      const provenances = await loadProvenances(
+        repo.db,
+        group.memberIds,
+        tenantId,
+      );
+      const annotated = annotateMirroredAssertions(
+        provenances,
+        policies.results,
+      );
       collapsed.push({
         ...EntitySchema.parse(entity),
         source_count: annotated.source_count,

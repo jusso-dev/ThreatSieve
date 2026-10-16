@@ -1,3 +1,8 @@
+import {
+  archivePageKey,
+  partitionArchive,
+} from "../../packages/intel/src/archive-pages";
+import { errorType } from "../../packages/observability/src/index";
 import { OptionalFeed } from "../../packages/intel/src/optional-feeds";
 import type { AppEnv } from "../../apps/api/src/env";
 import { Repository } from "../../packages/database/src/repository";
@@ -71,19 +76,20 @@ export async function syncFeed(env: AppEnv, job: PipelineJob) {
     }
     const batch = await feed.fetch((await feed.getCheckpoint()) ?? undefined);
     const date = new Date().toISOString();
+    const archiveRunId = job.jobId + ":g" + (job.generation ?? 0);
     const rawKey =
       "raw/" +
       feed.id +
       "/" +
       date.slice(0, 10).replace(/-/g, "/") +
       "/" +
-      job.jobId +
+      archiveRunId +
       ".json";
     await env.ARCHIVE.put(rawKey, JSON.stringify(batch.raw), {
       httpMetadata: { contentType: "application/json" },
     });
-    const recordsKey = "raw/" + feed.id + "/batches/" + job.jobId + ".json";
-    await env.ARCHIVE.put(recordsKey, JSON.stringify(batch.records));
+    const recordsKey = "raw/" + feed.id + "/batches/" + archiveRunId + ".json";
+    await partitionArchive(env.ARCHIVE, recordsKey, batch.records, 500);
     const fanout = {
       ...makeJob(
         "ingest",
@@ -92,6 +98,8 @@ export async function syncFeed(env: AppEnv, job: PipelineJob) {
         {
           mode: "feed-fanout",
           recordsKey,
+          partitioned: true,
+          pageSize: 500,
           rawKey,
           offset: 0,
           total: batch.records.length,
@@ -121,12 +129,7 @@ export async function syncFeed(env: AppEnv, job: PipelineJob) {
     await env.DB.prepare(
       "UPDATE sources SET status='error',errors=errors+1,last_error=? WHERE id=?",
     )
-      .bind(
-        error instanceof Error
-          ? error.message.slice(0, 160)
-          : "Feed sync failed",
-        feed.id,
-      )
+      .bind(errorType(error), feed.id)
       .run();
     throw error;
   }
@@ -135,6 +138,8 @@ export async function fanoutFeed(env: AppEnv, job: PipelineJob) {
   const payload = z
     .object({
       recordsKey: z.string(),
+      partitioned: z.boolean().optional(),
+      pageSize: z.union([z.literal(100), z.literal(500)]).default(500),
       rawKey: z.string(),
       offset: z.number().int(),
       total: z.number().int(),
@@ -142,11 +147,31 @@ export async function fanoutFeed(env: AppEnv, job: PipelineJob) {
       checkpoint: z.string(),
     })
     .parse(job.payload);
-  const archive = await env.ARCHIVE.get(payload.recordsKey);
-  if (!archive) throw new Error("Missing feed archive");
-  const records = z.array(z.unknown()).parse(await archive.json());
+  if (!payload.partitioned) {
+    const legacy = await env.ARCHIVE.get(payload.recordsKey);
+    if (!legacy) throw new Error("Missing feed archive");
+    await partitionArchive(
+      env.ARCHIVE,
+      payload.recordsKey,
+      z.array(z.unknown()).parse(await legacy.json()),
+      payload.pageSize,
+    );
+  }
+  const archive = await env.ARCHIVE.get(
+    archivePageKey(payload.recordsKey, payload.offset),
+  );
+  if (!archive) throw new Error("Missing feed archive page");
+  const page = z
+    .array(z.unknown())
+    .max(500)
+    .parse(await archive.json());
+  if (
+    payload.offset > payload.total ||
+    page.length !== Math.min(payload.pageSize, payload.total - payload.offset)
+  )
+    throw new Error("Feed page size mismatch");
   const repo = new Repository(env.DB);
-  const page = records.slice(payload.offset, payload.offset + 500);
+  const children: PipelineJob[] = [];
   for (let i = 0; i < page.length; i += 10) {
     const offset = payload.offset + i;
     const key = payload.recordsKey.replace(".json", "/" + offset + ".json");
@@ -166,20 +191,17 @@ export async function fanoutFeed(env: AppEnv, job: PipelineJob) {
       ),
       jobId: payload.feedJobId + ":chunk:" + offset,
     };
-    await repo.enqueue(child);
+    children.push(child);
   }
   const nextOffset = payload.offset + page.length;
-  await repo.finish(
-    job,
-    { records: page.length },
-    nextOffset < records.length
-      ? {
-          ...job,
-          jobId: payload.feedJobId + ":fanout:" + nextOffset,
-          payload: { ...job.payload, offset: nextOffset },
-        }
-      : undefined,
-  );
+  if (nextOffset < payload.total)
+    children.push({
+      ...job,
+      jobId: payload.feedJobId + ":fanout:" + nextOffset,
+      generation: 0,
+      payload: { ...job.payload, partitioned: true, offset: nextOffset },
+    });
+  await repo.finish(job, { records: page.length }, children);
 }
 export async function normalizeFeedChunk(env: AppEnv, job: PipelineJob) {
   const repo = new Repository(env.DB);
@@ -187,11 +209,13 @@ export async function normalizeFeedChunk(env: AppEnv, job: PipelineJob) {
   const file = await env.ARCHIVE.get(String(job.payload.feedChunk));
   if (!file) throw new Error("Feed chunk missing");
   const items = z.array(z.unknown()).parse(await file.json());
-  const { ingestRecord } = await import("../../packages/intel/src/ingest");
-  const ids: string[] = [];
+  const { ingestVersionedRecord } =
+    await import("../../packages/intel/src/versioned-ingest");
+
   let processed = 0,
     added = 0,
     updated = 0,
+    unchanged = 0,
     rejected = 0;
   const offset = z
     .number()
@@ -239,23 +263,23 @@ export async function normalizeFeedChunk(env: AppEnv, job: PipelineJob) {
               .id
           : undefined);
       const existed = recordId ? await repo.entity(recordId) : null;
-      const id = await ingestRecord(repo, record, String(job.payload.rawKey));
-      if (id) {
-        ids.push(id);
+      const result = await ingestVersionedRecord(
+        env.DB,
+        record,
+        job,
+        String(job.payload.rawKey),
+      );
+      if (!result.changed) unchanged++;
+      if (result.id && result.changed) {
         if (existed) updated++;
         else added++;
       }
     }
     processed++;
   }
-  for (const id of ids)
-    await repo.enqueue({
-      ...makeJob("enrich", id, undefined, {}, job.correlationId),
-      jobId: job.jobId + ":enrich:" + id,
-    });
   await repo.finish(
     job,
-    { processed, added, updated, rejected },
+    { processed, added, updated, unchanged, rejected },
     offset + 10 < items.length
       ? {
           ...job,

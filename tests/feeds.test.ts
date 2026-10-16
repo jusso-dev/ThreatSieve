@@ -405,3 +405,54 @@ it("rejects redirects without forwarding feed credentials to another host", asyn
   for (const [, init] of request.mock.calls)
     expect(init?.redirect).toBe("manual");
 });
+
+it("only globally shaped STIX IDs receive a shared provenance namespace", async () => {
+  const provenance = (sourceId: string) => ({
+    sourceId,
+    sourceName: sourceId,
+    retrievedAt: new Date().toISOString(),
+    redistributable: true,
+  });
+  const raw = {
+    type: "malware",
+    id: "malware--a366d47b-73b9-421c-bbfb-7d113ebe5485",
+    name: "Namespace fixture",
+  };
+  const a = await stixRecord(raw, provenance("mitre")),
+    b = await stixRecord(raw, provenance("taxii"));
+  expect(a[0]!.provenance.sourceRecordNamespace).toBe("stix");
+  expect(b[0]!.provenance.sourceRecordNamespace).toBe("stix");
+  const local = await stixRecord({ ...raw, id: "42" }, provenance("taxii"));
+  expect(local[0]!.provenance.sourceRecordNamespace).toBe("taxii");
+});
+
+it("declares MITRE mirror origins while keeping MISP collection versions separate", async () => {
+  const feed = new AdditionalFeed("misp", "MISP Galaxy", repo, {});
+  const raw = {
+    uuid: "misp-mirror-fixture",
+    value: "MISP namespace fixture",
+    description: "Synthetic provenance",
+    collection: "mitre-malware",
+  };
+  const mirrored = (await feed.normalize(raw))[0]!.provenance;
+  const native = (
+    await feed.normalize({ ...raw, collection: "ransomware" })
+  )[0]!.provenance;
+  expect(mirrored.originalSourceId).toBe("mitre");
+  expect(native.originalSourceId).toBe("misp");
+  expect(mirrored.sourceRecordNamespace).not.toBe(native.sourceRecordNamespace);
+  const { independentSourceCount } =
+    await import("../packages/scoring/src/independence");
+  expect(
+    independentSourceCount([
+      mirrored,
+      {
+        sourceId: "mitre",
+        sourceName: "MITRE",
+        originalSourceId: "stix-producer-identity",
+        retrievedAt: new Date().toISOString(),
+        redistributable: true,
+      },
+    ]),
+  ).toBe(1);
+});

@@ -134,9 +134,7 @@ describe("confidence factor codes name what they measure (leaf 1.2.3)", () => {
       0.8,
       [tenantTelemetry],
     );
-    const direct = withDirect.factors.find(
-      (f) => f.code === "DIRECT_EVIDENCE",
-    );
+    const direct = withDirect.factors.find((f) => f.code === "DIRECT_EVIDENCE");
     expect(direct?.value).toBe(1);
     expect(codesOf(withDirect.factors)).not.toContain("CUSTOMER_OBSERVED");
   });
@@ -175,6 +173,15 @@ describe("evaluation dataset hygiene (leaf 1.2.3)", () => {
   const dataset = async (kind: "synthetic-challenge" | "analyst-labelled") => ({
     version: "1.0" as const,
     kind,
+    sampling:
+      kind === "analyst-labelled"
+        ? {
+            population: "Independent reviewed cases for the test population",
+            method: "Stratified random held-out sample by source",
+            exclusions: "Mirrored duplicate source reports excluded",
+            heldOut: true as const,
+          }
+        : undefined,
     description: "Evaluation cases for label hygiene checks",
     cases: [
       {
@@ -203,7 +210,9 @@ describe("evaluation dataset hygiene (leaf 1.2.3)", () => {
     ],
   });
   it("a synthetic-challenge dataset never reaches a report without a caveat", async () => {
-    const parsed = EvaluationDataset.parse(await dataset("synthetic-challenge"));
+    const parsed = EvaluationDataset.parse(
+      await dataset("synthetic-challenge"),
+    );
     expect(parsed.caveat).toBe(SYNTHETIC_CHALLENGE_CAVEAT);
     expect(parsed.caveat).toMatch(/[Nn]ot .*accuracy|must not be claimed/);
   });
@@ -215,9 +224,7 @@ describe("evaluation dataset hygiene (leaf 1.2.3)", () => {
     expect(EvaluationDataset.parse(d).caveat).toBe(d.caveat);
   });
   it("an analyst-labelled dataset is not force-caveated", async () => {
-    const parsed = EvaluationDataset.parse(
-      await dataset("analyst-labelled"),
-    );
+    const parsed = EvaluationDataset.parse(await dataset("analyst-labelled"));
     expect(parsed.caveat).toBeUndefined();
   });
 });

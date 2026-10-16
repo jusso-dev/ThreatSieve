@@ -50,6 +50,12 @@ Local verification passed 216 unit/integration cases, all 86 isolated full-stack
 
 ### Remaining improvements, in priority order
 
+The list below records the original 16 October audit. Subsequent repository fixes
+for bounded bulk delivery, archive partitioning, namespaced identities and atomic
+versioned ingestion are tracked in [issue remediation](issue-remediation.md).
+Their release gates and the unresolved analyst-data, retention and live feed/recovery
+requirements remain explicit there; these local fixes do not claim deployment.
+
 1. **Bound bulk continuation state.** `workers/ingest/upload.ts` carries every prior observable ID and every rejection in subsequent queue payloads. A representative continuation with 3,000 distinct IDs is 216,091 bytes, exceeding Cloudflare Queues' 128 KB limit, while `BulkRequest` accepts up to 100,000 inputs. Move deduplication/retry state into an indexed, tenant-scoped store and cap carried error samples while retaining full counts. Preserve retry accounting and cross-page duplicate detection.
 2. **Read bulk archives once per chunk.** Every 100-record continuation downloads and parses the complete upload again; `fanoutFeed` similarly reparses its whole archived batch. Persist bounded chunks or use a streaming partition stage to avoid approximately quadratic parsing/download work. This needs an idempotent archive/job contract, not just a smaller page size.
 3. **Distinguish original sources from redistributors.** Confidence factors still count configured independence groups, while canonical views collapse equal upstream record IDs. Record IDs from unrelated providers are not necessarily globally unique. Add explicit upstream identity/namespace metadata before unifying corroboration across classifier and dossier scores.

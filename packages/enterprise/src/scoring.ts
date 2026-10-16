@@ -1,3 +1,4 @@
+import { independentSourceCount } from "../../scoring/src/independence";
 import type {
   Assessment,
   CustomerEnvironment,
@@ -40,12 +41,9 @@ export function scoreDossier(
   };
   const malicious = evidence.filter((e) => e.data.malicious === true),
     benign = evidence.filter((e) => e.data.malicious === false);
-  const groups = new Set(
-    evidence.map(
-      (e) =>
-        sources.find((s) => s.id === e.sourceId)?.independent_group ??
-        e.sourceId,
-    ),
+  const groupCount = independentSourceCount(
+    evidence.map((e) => e.provenance),
+    sources,
   );
   const recent = evidence.filter((e) => {
     const d = Date.parse(e.observedAt ?? "");
@@ -90,13 +88,10 @@ export function scoreDossier(
     threat,
     "INDEPENDENT_CORROBORATION",
     "Multiple independent sources support maliciousness",
-    new Set(
-      malicious.map(
-        (e) =>
-          sources.find((s) => s.id === e.sourceId)?.independent_group ??
-          e.sourceId,
-      ),
-    ).size > 1
+    independentSourceCount(
+      malicious.map((e) => e.provenance),
+      sources,
+    ) > 1
       ? 15
       : 0,
     malicious,
@@ -163,7 +158,7 @@ export function scoreDossier(
     confidence,
     "INDEPENDENT_SOURCES",
     "Independent source groups (maximum three)",
-    Math.round(Math.min(groups.size / 3, 1) * 20),
+    Math.round(Math.min(groupCount / 3, 1) * 20),
   );
   add(
     confidence,
@@ -333,7 +328,7 @@ export function scoreDossier(
       code: "NO_EVIDENCE",
       message: "No supporting evidence is available.",
     });
-  if (groups.size === 1)
+  if (groupCount === 1)
     gaps.push({
       code: "SINGLE_SOURCE",
       message: "Only one independent source group supports this intelligence.",
@@ -381,7 +376,7 @@ export function scoreDossier(
         "50% threat + 35% relevance + 15% confidence; missing dimensions contribute zero, not benign evidence",
     },
     gaps,
-    independentSources: groups.size,
+    independentSources: groupCount,
     entityId: entity.id,
   };
 }

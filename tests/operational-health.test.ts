@@ -486,3 +486,63 @@ it("the report carries stage progress and the last outbox publication", async ()
   expect(row?.latest).toEqual(expect.any(String));
   expect(report.outbox.last_dispatch).toBe(at);
 });
+
+it("future or invalid progress timestamps cannot conceal a stalled stage", () => {
+  for (const latest of [new Date(now + 60000).toISOString(), "invalid"]) {
+    const alerts = operationalAlerts(
+      {
+        ...base,
+        jobs: [
+          {
+            stage: "classify",
+            status: "queued",
+            count: 1,
+            oldest: new Date(now - 20 * 60000).toISOString(),
+            latest: null,
+            stale_result_count: 0,
+          },
+          {
+            stage: "classify",
+            status: "complete",
+            count: 1,
+            oldest: at,
+            latest,
+            stale_result_count: 0,
+          },
+        ],
+      },
+      now,
+    );
+    expect(alerts).toContainEqual(
+      expect.objectContaining({ code: "PIPELINE_LAG", severity: "critical" }),
+    );
+  }
+});
+it("another tenant's recent outbox dispatch does not mask a tenant's publication stall", async () => {
+  const repo = new Repository(db);
+  const mine = makeJob("enrich", "scoped-old", "ops-a");
+  const theirs = makeJob("enrich", "scoped-recent", "ops-b");
+  await repo.enqueue(mine);
+  await repo.enqueue(theirs);
+  await db
+    .prepare("UPDATE outbox SET created_at=? WHERE id=?")
+    .bind(old, mine.jobId)
+    .run();
+  // Earlier tests may have dispatched global or own entries. Reset only this
+  // isolated database's publication signal to establish the cross-tenant case.
+  await db
+    .prepare(
+      "UPDATE outbox SET dispatched_at=? WHERE dispatched_at IS NOT NULL",
+    )
+    .bind(old)
+    .run();
+  await db
+    .prepare("UPDATE outbox SET dispatched_at=? WHERE id=?")
+    .bind(new Date().toISOString(), theirs.jobId)
+    .run();
+  const report = await operationalReport(env, "ops-a");
+  expect(report.outbox.last_dispatch).toBeNull();
+  expect(report.alerts).toContainEqual(
+    expect.objectContaining({ code: "OUTBOX_LAG", severity: "critical" }),
+  );
+});

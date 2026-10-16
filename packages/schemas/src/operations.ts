@@ -35,7 +35,7 @@ export interface OperationalReport {
   outbox: {
     pending: number;
     oldest: string | null;
-    /** Most recent publication within one feed cycle. */
+    /** Most recent publication in the stall window for this tenant or public work. */
     last_dispatch: string | null;
   };
   usage: { calls: number; input_tokens: number; daily_limit: number };

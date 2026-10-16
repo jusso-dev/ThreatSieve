@@ -29,6 +29,10 @@ export const Provenance = z.object({
   sourceName: z.string().min(1),
   sourceUrl: z.url().optional(),
   sourceRecordId: z.string().optional(),
+  /** Identity of the original producer, distinct from the delivery provider. */
+  originalSourceId: z.string().min(1).optional(),
+  /** Provider-local by default; explicit shared namespaces identify mirrors. */
+  sourceRecordNamespace: z.string().min(1).optional(),
   retrievedAt: z.iso.datetime(),
   publishedAt: z.string().optional(),
   sourceConfidence: Probability.optional(),
