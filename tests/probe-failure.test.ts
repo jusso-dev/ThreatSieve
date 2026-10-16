@@ -2,9 +2,10 @@ import { expect, it } from "vitest";
 import { z } from "zod";
 import { alertLabels, probeFailureReason } from "../scripts/probe-failure";
 it("production probe names the failure class without echoing details", async () => {
-  const timeout = await fetch("https://example.invalid", {
-    signal: AbortSignal.timeout(0),
-  }).catch((e: unknown) => e);
+  // The same TimeoutError fetch rejects with, without touching the network.
+  const signal = AbortSignal.timeout(1);
+  await new Promise((resolve) => signal.addEventListener("abort", resolve));
+  const timeout: unknown = signal.reason;
   expect(probeFailureReason(timeout)).toBe("timed out after 30 seconds");
   expect(probeFailureReason(new Error("ProbeHTTP503"))).toBe("HTTP 503");
   expect(
