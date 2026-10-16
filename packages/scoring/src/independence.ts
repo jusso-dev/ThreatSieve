@@ -23,6 +23,8 @@ export function independentSourceCount(
       policies.find((s) => s.id === p.sourceId)?.independent_group ??
       p.sourceId;
     const record = upstreamIdentity(p);
+    // A declared producer can name a native provider by sourceId, even when
+    // that provider also carries a separate STIX creator identity.
     for (const key of [
       "group:" + group,
       "origin:" + p.sourceId,

@@ -35,8 +35,7 @@ export function errorType(error: unknown) {
   }
   if (/subrequest.*limit|too many subrequests/i.test(error.message))
     return "SubrequestLimit";
-  if (error.name === "TimeoutError" || /timeout|timed out/i.test(error.message))
-    return "UpstreamTimeout";
+  if (error.name === "TimeoutError") return "UpstreamTimeout";
   if (error.name === "AbortError") return "UpstreamAborted";
   if (/credential required/i.test(error.message))
     return "FeedCredentialsMissing";
@@ -45,6 +44,7 @@ export function errorType(error: unknown) {
   if (/upstream HTTP 429\b/i.test(error.message)) return "UpstreamRateLimited";
   if (/upstream HTTP 5\d\d\b/i.test(error.message))
     return "UpstreamUnavailable";
+  if (/timeout|timed out/i.test(error.message)) return "UpstreamTimeout";
   if (/network|fetch failed|ECONNRESET|ENOTFOUND/i.test(error.message))
     return "UpstreamNetwork";
   return error.constructor.name;

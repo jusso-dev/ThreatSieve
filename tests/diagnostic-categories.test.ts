@@ -10,6 +10,8 @@ it("diagnostics expose stable categories without provider messages or credential
     ],
     ["URLhaus upstream HTTP 429", "UpstreamRateLimited"],
     ["MISP upstream HTTP 503", "UpstreamUnavailable"],
+    ["ThreatFox upstream HTTP 503 request timed out", "UpstreamUnavailable"],
+    ["URLhaus credential required after timeout", "FeedCredentialsMissing"],
     ["fetch failed https://private.invalid", "UpstreamNetwork"],
     ["D1_ERROR: SQL timeout secret-value", "D1Timeout"],
   ])
