@@ -28,9 +28,16 @@ export interface OperationalReport {
     status: string;
     count: number;
     oldest: string;
+    /** Latest updated_at: last completion for complete rows, last claim for running rows. */
+    latest: string | null;
     stale_result_count: number;
   }[];
-  outbox: { pending: number; oldest: string | null };
+  outbox: {
+    pending: number;
+    oldest: string | null;
+    /** Most recent publication within one feed cycle. */
+    last_dispatch: string | null;
+  };
   usage: { calls: number; input_tokens: number; daily_limit: number };
   integrations: {
     connector_id: string;

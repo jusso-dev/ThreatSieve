@@ -35,6 +35,17 @@ Relationship-only feed records skip entity-existence lookups. Each relationship 
 
 New outbox entries timestamp their own insertion, even when a continuation job retains its parent's original creation time. `OUTBOX_LAG` measures publication wait; `PIPELINE_LAG` continues to measure the full processing age.
 
+### Lag alerts: draining versus stalled
+
+Each six-hourly feed sync fans out a backlog that can take hours to drain, so pending age alone does not mean a stage is broken. The operations report carries each stage's latest completion or claim (`jobs[].latest`) and the latest outbox publication (`outbox.last_dispatch`).
+
+- `PIPELINE_LAG` (critical): a stage has work pending for more than 15 minutes and no completion or claim in the last 15 minutes, or its oldest pending work is more than six hours old (one feed cycle). There is one alert per stage.
+- `PIPELINE_BACKLOG` (warning): work has been pending for more than 15 minutes but the stage is still making progress.
+- `OUTBOX_LAG` (critical): work has waited more than 10 minutes and nothing was published in the last 10 minutes, or the oldest entry is more than six hours old.
+- `OUTBOX_BACKLOG` (warning): work has waited more than 10 minutes but the outbox is still publishing.
+
+The scheduled maintenance tick publishes up to ten 100-message rounds while each round is full. The production probe prints alert codes with their stage or public feed name, for example `PIPELINE_LAG(classify)`. Tenant connectors and private sources are printed as the code alone.
+
 Late dead-letter messages cannot overwrite committed results or a newer replay generation. A completed parent may publish a downstream job only for its current generation. Source finalization atomically updates its checkpoint and counters once.
 
 For the specific legacy delivery defect, first take a D1 Time Travel bookmark, then inspect:

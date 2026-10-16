@@ -1412,7 +1412,10 @@ export default {
         }
         await recoverExpiredJobs(env.DB);
         await scheduleOperations(env.DB);
-        await dispatchOutbox(env);
+        // A full round means more may be waiting; drain a bounded amount per
+        // tick (each round stays within the 100-message sendBatch limit).
+        for (let round = 0; round < 10; round++)
+          if ((await dispatchOutbox(env)) < 100) break;
         await finalizeFeeds(env);
         await env.DB.prepare("DELETE FROM rate_limits WHERE expires_at<?")
           .bind(Math.floor(Date.now() / 60000))
