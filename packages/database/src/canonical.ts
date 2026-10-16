@@ -321,12 +321,11 @@ async function loadProvenances(
   tenantId: string,
 ): Promise<SourceProvenance[]> {
   if (!entityIds.length) return [];
-  const placeholders = entityIds.map(() => "?").join(",");
   const rows = await db
     .prepare(
-      `SELECT provenance FROM entity_sources WHERE entity_id IN (${placeholders}) AND NOT EXISTS(SELECT 1 FROM tenant_source_policy p WHERE p.tenant_id=? AND p.source_id=entity_sources.source_id AND p.enabled=0) ORDER BY source_id,source_record_id`,
+      `SELECT provenance FROM entity_sources WHERE entity_id IN (SELECT value FROM json_each(?)) AND NOT EXISTS(SELECT 1 FROM tenant_source_policy p WHERE p.tenant_id=? AND p.source_id=entity_sources.source_id AND p.enabled=0) ORDER BY source_id,source_record_id`,
     )
-    .bind(...entityIds, tenantId)
+    .bind(JSON.stringify(entityIds), tenantId)
     .all<{ provenance: string }>();
   const seen = new Set<string>();
   const out: SourceProvenance[] = [];
