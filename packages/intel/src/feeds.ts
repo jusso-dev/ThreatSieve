@@ -268,6 +268,13 @@ export interface FeedSecrets {
   MISP_FEED_ALLOWED_HOST?: string;
   MISP_FEED_API_KEY?: string;
   OTX_ENABLED?: string;
+  YETI_ENABLED?: string;
+  YETI_ENDPOINT?: string;
+  YETI_ALLOWED_HOST?: string;
+  YETI_API_KEY?: string;
+  YETI_PAGE_LIMIT?: string;
+  /** Comma-separated; only observables carrying every tag are imported. */
+  YETI_TAGS?: string;
 }
 export class PublicFeed implements ThreatFeedProvider {
   readonly type = "json" as const;

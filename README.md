@@ -57,7 +57,7 @@ Sync MITRE first, then MISP, then indicator feeds so canonical knowledge is avai
 - Confirm/reject/modify/investigate, bulk upload, expandable source health, clusters and environment profile.
 - Asynchronous processing, D1 outbox, job leases, retry/dead-letter handling and replay.
 - STIX 2.1 export and a Python OpenCTI connector using `OpenCTIConnectorHelper.send_stix2_bundle`.
-- Optional provider adapters for OTX, VirusTotal, GreyNoise, TAXII, STIX and MISP; disabled unless explicitly configured.
+- Optional provider adapters for OTX, VirusTotal, GreyNoise, TAXII, STIX, MISP and [Yeti](docs/intelligence-sources.md#yeti); disabled unless explicitly configured.
 - Offline evaluation metrics and browser/integration/security tests.
 
 [Analyst workflows and boundaries](docs/intelligence-operations.md) · [Automation](docs/automation.md) · [TAXII and MISP](docs/taxii-misp.md) · [Enterprise architecture](docs/enterprise-upgrade.md)

@@ -7,6 +7,7 @@ import type {
   FeedBatch,
   FeedHealth,
   NormalizedIntelRecord,
+  ObservableType,
 } from "../../schemas/src/index";
 import { parseIndicators } from "./upload";
 export interface OptionalFeedConfig {
@@ -17,6 +18,66 @@ export interface OptionalFeedConfig {
   format?: "stix" | "misp" | "text" | "csv" | "json";
   /** TAXII objects per page (1-1000); servers may cap it lower. Default 100. */
   pageLimit?: number;
+  /** Yeti only: import observables carrying all of these tags. */
+  tags?: string[];
+}
+function approvedEndpoint(config: OptionalFeedConfig): URL {
+  if (!config.endpoint || !config.allowedHost)
+    throw new Error(
+      "Operator-configured endpoint and allowlisted hostname required",
+    );
+  const url = new URL(config.endpoint);
+  if (
+    url.protocol !== "https:" ||
+    url.hostname !== config.allowedHost ||
+    url.username ||
+    url.password ||
+    (url.port && url.port !== "443") ||
+    /^(localhost|.*\.local|\d+\.\d+\.\d+\.\d+|\[.*\])$/.test(url.hostname)
+  )
+    throw new Error("Endpoint must use an explicitly approved HTTPS DNS host");
+  return url;
+}
+function pageLimit(value: number | undefined) {
+  return z.number().int().min(1).max(1000).catch(100).parse(value);
+}
+// Yeti stores every DNS name as `hostname`; normalisation decides domain vs
+// hostname. Types without a reliable ThreatSieve equivalent are skipped.
+const yetiTypes: Record<string, ObservableType | "dns"> = {
+  ipv4: "ipv4",
+  ipv6: "ipv6",
+  cidr: "cidr",
+  hostname: "dns",
+  url: "url",
+  email: "email",
+  md5: "md5",
+  sha1: "sha1",
+  sha256: "sha256",
+  ja3: "ja3",
+  asn: "asn",
+  mutex: "mutex",
+  registry_key: "registry-key",
+  user_agent: "user-agent",
+};
+const YetiTag = z.object({
+  name: z.string().optional(),
+  last_seen: z.string().optional(),
+  fresh: z.boolean().optional(),
+});
+const YetiObservable = z.object({
+  id: z.string().min(1),
+  value: z.string().min(1),
+  type: z.string(),
+  modified: z.string(),
+  // Yeti 2.x releases before the tag list change return a name-keyed map.
+  tags: z.union([z.array(YetiTag), z.record(z.string(), YetiTag)]).default([]),
+  context: z.array(z.record(z.string(), z.unknown())).default([]),
+});
+function yetiTimestamp(value: string): string {
+  const time = Date.parse(value);
+  if (!Number.isFinite(time)) throw new Error("Invalid Yeti timestamp");
+  // Yeti filters at millisecond precision and its date filter is inclusive.
+  return new Date(time).toISOString();
 }
 function observationDate(
   value: string | number | undefined,
@@ -27,7 +88,14 @@ function observationDate(
 }
 export class OptionalFeed extends PublicFeed {
   constructor(
-    id: "otx" | "virustotal" | "greynoise" | "taxii" | "stix" | "misp-feed",
+    id:
+      | "otx"
+      | "virustotal"
+      | "greynoise"
+      | "taxii"
+      | "stix"
+      | "misp-feed"
+      | "yeti",
     name: string,
     repo: Repository,
     private config: OptionalFeedConfig,
@@ -46,6 +114,7 @@ export class OptionalFeed extends PublicFeed {
   }
   override async fetch(cursor?: string): Promise<FeedBatch> {
     if (!this.config.enabled) throw new Error("Feed disabled");
+    if (this.id === "yeti") return this.fetchYeti(cursor);
     let url: URL;
     const started = new Date().toISOString();
     const resume = cursor?.startsWith("{")
@@ -104,22 +173,7 @@ export class OptionalFeed extends PublicFeed {
       );
       headers.key = this.config.apiKey;
     } else {
-      if (!this.config.endpoint || !this.config.allowedHost)
-        throw new Error(
-          "Operator-configured endpoint and allowlisted hostname required",
-        );
-      url = new URL(this.config.endpoint);
-      if (
-        url.protocol !== "https:" ||
-        url.hostname !== this.config.allowedHost ||
-        url.username ||
-        url.password ||
-        (url.port && url.port !== "443") ||
-        /^(localhost|.*\.local|\d+\.\d+\.\d+\.\d+|\[.*\])$/.test(url.hostname)
-      )
-        throw new Error(
-          "Endpoint must use an explicitly approved HTTPS DNS host",
-        );
+      url = approvedEndpoint(this.config);
       if (this.id === "taxii") {
         headers.Accept = "application/taxii+json;version=2.1";
         if (resume?.from || (cursor && !resume))
@@ -128,18 +182,7 @@ export class OptionalFeed extends PublicFeed {
             z.iso.datetime().parse(resume?.from ?? cursor),
           );
         if (resume) url.searchParams.set("next", resume.next);
-        url.searchParams.set(
-          "limit",
-          String(
-            z
-              .number()
-              .int()
-              .min(1)
-              .max(1000)
-              .catch(100)
-              .parse(this.config.pageLimit),
-          ),
-        );
+        url.searchParams.set("limit", String(pageLimit(this.config.pageLimit)));
       }
       if (this.config.apiKey)
         headers.Authorization = "Bearer " + this.config.apiKey;
@@ -283,6 +326,87 @@ export class OptionalFeed extends PublicFeed {
     }
     return { raw, records, cursor: started };
   }
+  /** Keyset pages on Yeti `modified` (inclusive filter). A page offset is only
+   * used to step past a full page that shares one timestamp. */
+  private async fetchYeti(cursor?: string): Promise<FeedBatch> {
+    if (!this.config.apiKey) throw new Error("Yeti credential required");
+    const base = approvedEndpoint(this.config);
+    const api = (path: string) =>
+      new URL(base.pathname.replace(/\/+$/, "") + "/api/v2/" + path, base);
+    const resume = cursor?.startsWith("{")
+      ? z
+          .object({
+            from: z.iso.datetime().optional(),
+            page: z.number().int().nonnegative(),
+          })
+          .parse(JSON.parse(cursor))
+      : { from: cursor ? z.iso.datetime().parse(cursor) : undefined, page: 0 };
+    const auth = await this.request(api("auth/api-token"), {
+      method: "POST",
+      headers: {
+        Accept: "application/json",
+        "x-yeti-apikey": this.config.apiKey,
+      },
+      redirect: "manual",
+      signal: AbortSignal.timeout(30000),
+    });
+    if (!auth.ok) throw new Error("Yeti authentication HTTP " + auth.status);
+    const token = z
+      .object({ access_token: z.string().min(1) })
+      .parse(JSON.parse(await boundedText(auth, 64 * 1024))).access_token;
+    const count = pageLimit(this.config.pageLimit);
+    const query: Record<string, string | string[]> = {};
+    if (resume.from) query.modified = ">" + resume.from;
+    if (this.config.tags?.length) query.tags = this.config.tags;
+    const response = await this.request(api("observables/search"), {
+      method: "POST",
+      headers: {
+        Accept: "application/json",
+        "Content-Type": "application/json",
+        Authorization: "Bearer " + token,
+      },
+      body: JSON.stringify({
+        query,
+        sorting: [
+          ["modified", true],
+          ["value", true],
+        ],
+        count,
+        page: resume.page,
+      }),
+      redirect: "manual",
+      signal: AbortSignal.timeout(30000),
+    });
+    if (!response.ok) throw new Error("Provider HTTP " + response.status);
+    const raw: unknown = JSON.parse(
+      await boundedText(response, 8 * 1024 * 1024),
+    );
+    const records = z
+      .object({ observables: z.array(z.unknown()) })
+      .parse(raw).observables;
+    const last = records.length
+      ? yetiTimestamp(YetiObservable.parse(records.at(-1)).modified)
+      : undefined;
+    if (records.length < count)
+      // Never fall back to the worker clock: Yeti stamps `modified` with its
+      // own, so an empty first sync keeps the lower bound open.
+      return {
+        raw,
+        records,
+        cursor: last ?? resume.from ?? JSON.stringify({ page: 0 }),
+      };
+    const stalled = resume.from !== undefined && last === resume.from;
+    return {
+      raw,
+      records,
+      more: true,
+      cursor: JSON.stringify(
+        stalled
+          ? { from: resume.from, page: resume.page + 1 }
+          : { from: last, page: 0 },
+      ),
+    };
+  }
   override async normalize(input: unknown): Promise<NormalizedIntelRecord[]> {
     const provenance = providerProvenance(this.id, this.name);
     if (this.id === "stix" || this.id === "taxii")
@@ -414,6 +538,50 @@ export class OptionalFeed extends PublicFeed {
           item.raw.last_seen,
         ),
       ];
+    }
+    if (this.id === "yeti") {
+      const item = YetiObservable.parse(input);
+      const mapped = yetiTypes[item.type];
+      if (!mapped) return [];
+      let type: ObservableType;
+      try {
+        type = (
+          await normalise(item.value, mapped === "dns" ? undefined : mapped)
+        ).type;
+      } catch {
+        return [];
+      }
+      if (mapped === "dns" && type !== "domain" && type !== "hostname")
+        return [];
+      const tags = Array.isArray(item.tags)
+        ? item.tags.flatMap((t) => (t.name ? [{ ...t, name: t.name }] : []))
+        : Object.entries(item.tags).map(([name, t]) => ({ ...t, name }));
+      const seen = tags
+        .map((t) => (t.last_seen ? Date.parse(t.last_seen) : NaN))
+        .filter(Number.isFinite);
+      const record = await make(
+        item.value,
+        {
+          description: "Observable recorded in Yeti",
+          sourceClaim: "Recorded in Yeti",
+          yetiId: item.id,
+          yetiType: item.type,
+          tags: tags.filter((t) => t.fresh !== false).map((t) => t.name),
+          expiredTags: tags.filter((t) => t.fresh === false).map((t) => t.name),
+          // Yeti often aggregates other feeds; keep the named upstreams visible.
+          contextSources: [
+            ...new Set(
+              item.context.flatMap((c) =>
+                typeof c.source === "string" ? [c.source] : [],
+              ),
+            ),
+          ].slice(0, 20),
+        },
+        item.id,
+        seen.length ? new Date(Math.max(...seen)).toISOString() : undefined,
+      );
+      record.observable = { value: item.value, type };
+      return [record];
     }
     if (this.id === "misp-feed") {
       const item = z

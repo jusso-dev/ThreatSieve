@@ -60,6 +60,17 @@ export function getFeed(env: AppEnv, id: string) {
       enabled: env.OTX_ENABLED === "true" && !!env.OTX_API_KEY,
       apiKey: env.OTX_API_KEY,
     });
+  if (id === "yeti")
+    return new OptionalFeed("yeti", "Yeti", new Repository(env.DB), {
+      enabled: env.YETI_ENABLED === "true" && !!env.YETI_API_KEY,
+      endpoint: env.YETI_ENDPOINT,
+      allowedHost: env.YETI_ALLOWED_HOST,
+      apiKey: env.YETI_API_KEY,
+      pageLimit: Number(env.YETI_PAGE_LIMIT ?? 100),
+      tags: env.YETI_TAGS?.split(",")
+        .map((tag) => tag.trim())
+        .filter(Boolean),
+    });
   if (!names[id]) throw new Error("Feed unavailable");
   const Provider = ["mitre", "threatfox"].includes(id)
     ? PublicFeed
