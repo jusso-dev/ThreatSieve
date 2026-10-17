@@ -1399,7 +1399,7 @@ export default {
       (async () => {
         if (event.cron === "17 */6 * * *") {
           const sources = await env.DB.prepare(
-            "SELECT id FROM sources WHERE enabled=1 AND id IN ('mitre','threatfox','misp','urlhaus','feodo','cisa-kev','taxii','stix','misp-feed','otx')",
+            "SELECT id FROM sources WHERE enabled=1 AND id IN ('mitre','threatfox','misp','urlhaus','feodo','cisa-kev','taxii','stix','misp-feed','otx','yeti')",
           ).all<{ id: string }>();
           for (const source of sources.results) {
             if (

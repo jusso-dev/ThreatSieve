@@ -47,6 +47,15 @@ it("optional feeds retain unknown observation time instead of refreshing intelli
         timestamp: String(Math.floor(Date.now() / 1000)),
       },
     },
+    {
+      id: "yeti",
+      input: {
+        id: "yeti-undated",
+        value: "historical.example",
+        type: "hostname",
+        modified: new Date().toISOString(),
+      },
+    },
   ] as const;
   for (const fixture of fixtures) {
     const feed = new OptionalFeed(
@@ -251,4 +260,166 @@ it("routes a private TAXII server through its VPC binding over the tunnel", asyn
   expect(new URL(seen[0]!.url).protocol).toBe("http:");
   expect(new URL(seen[0]!.url).hostname).toBe("opencti.threatsieve.internal");
   expect(seen[0]!.auth).toBe("Bearer reader-token");
+});
+const yetiConfig = {
+  enabled: true,
+  endpoint: "https://yeti.example.test/",
+  allowedHost: "yeti.example.test",
+  apiKey: "synthetic-key",
+  pageLimit: 2,
+};
+function yetiObservable(id: string, modified: string, value = id + ".test") {
+  return { id, value, type: "hostname", modified, tags: [], context: [] };
+}
+it("exchanges the Yeti API key for a bearer token and pages by modified time", async () => {
+  const calls: { url: URL; init: RequestInit }[] = [];
+  const pages = [
+    [
+      yetiObservable("a", "2026-09-01T00:00:00.000001Z"),
+      yetiObservable("b", "2026-09-02T00:00:00Z"),
+    ],
+    [yetiObservable("c", "2026-09-03T00:00:00Z")],
+  ];
+  const feed = new OptionalFeed(
+    "yeti",
+    "Synthetic Yeti",
+    repo,
+    { ...yetiConfig, tags: ["tlp:green"] },
+    async (input, init) => {
+      const url = new URL(String(input));
+      calls.push({ url, init: init! });
+      if (url.pathname.endsWith("/auth/api-token"))
+        return Response.json({ access_token: "jwt", token_type: "bearer" });
+      return Response.json({ observables: pages.shift(), total: 3 });
+    },
+  );
+  const first = await feed.fetch("2026-08-01T00:00:00.000Z");
+  expect(first.more).toBe(true);
+  expect(JSON.parse(first.cursor)).toEqual({
+    from: "2026-09-02T00:00:00.000Z",
+    page: 0,
+  });
+  const second = await feed.fetch(first.cursor);
+  expect(second.more).toBeUndefined();
+  expect(second.cursor).toBe("2026-09-03T00:00:00.000Z");
+
+  expect(calls[0]!.url.href).toBe(
+    "https://yeti.example.test/api/v2/auth/api-token",
+  );
+  expect(new Headers(calls[0]!.init.headers).get("x-yeti-apikey")).toBe(
+    "synthetic-key",
+  );
+  const search = calls[1]!;
+  expect(search.url.pathname).toBe("/api/v2/observables/search");
+  expect(new Headers(search.init.headers).get("authorization")).toBe(
+    "Bearer jwt",
+  );
+  expect(search.init.redirect).toBe("manual");
+  expect(JSON.parse(String(search.init.body))).toMatchObject({
+    query: { modified: ">2026-08-01T00:00:00.000Z", tags: ["tlp:green"] },
+    count: 2,
+    page: 0,
+  });
+  expect(JSON.parse(String(calls[3]!.init.body)).query.modified).toBe(
+    ">2026-09-02T00:00:00.000Z",
+  );
+});
+it("steps past a full Yeti page that shares one timestamp instead of looping", async () => {
+  const stamp = "2026-09-01T00:00:00.000Z";
+  const bodies: { page: number }[] = [];
+  const feed = new OptionalFeed(
+    "yeti",
+    "Synthetic Yeti",
+    repo,
+    yetiConfig,
+    async (input, init) => {
+      if (String(input).endsWith("/auth/api-token"))
+        return Response.json({ access_token: "jwt" });
+      bodies.push(JSON.parse(String(init!.body)));
+      return Response.json({
+        observables: [yetiObservable("a", stamp), yetiObservable("b", stamp)],
+        total: 9,
+      });
+    },
+  );
+  const first = await feed.fetch(stamp);
+  expect(JSON.parse(first.cursor)).toEqual({ from: stamp, page: 1 });
+  const second = await feed.fetch(first.cursor);
+  expect(JSON.parse(second.cursor)).toEqual({ from: stamp, page: 2 });
+  expect(bodies.map((b) => b.page)).toEqual([0, 1]);
+});
+it("requires an approved HTTPS Yeti host and an API key", async () => {
+  const request = async () => Response.json({});
+  for (const config of [
+    { ...yetiConfig, endpoint: "http://yeti.example.test/" },
+    {
+      ...yetiConfig,
+      endpoint: "https://192.0.2.10/",
+      allowedHost: "192.0.2.10",
+    },
+    { ...yetiConfig, allowedHost: "other.example.test" },
+  ])
+    await expect(
+      new OptionalFeed("yeti", "Yeti", repo, config, request).fetch(),
+    ).rejects.toThrow("approved HTTPS DNS host");
+  await expect(
+    new OptionalFeed(
+      "yeti",
+      "Yeti",
+      repo,
+      { ...yetiConfig, apiKey: undefined },
+      request,
+    ).fetch(),
+  ).rejects.toThrow("credential required");
+});
+it("maps Yeti observables without inventing maliciousness or unsupported types", async () => {
+  const feed = new OptionalFeed("yeti", "Yeti", repo, yetiConfig);
+  const [domain] = await feed.normalize({
+    id: "obs-1",
+    value: "c2.example.test",
+    type: "hostname",
+    modified: "2026-09-05T00:00:00Z",
+    tags: [
+      { name: "cobalt-strike", last_seen: "2026-08-20T00:00:00Z", fresh: true },
+      { name: "old-campaign", last_seen: "2025-01-01T00:00:00Z", fresh: false },
+    ],
+    context: [{ source: "AbuseCHMalwareBazaar", note: "x" }, { note: "y" }],
+  });
+  expect(domain!.observable).toEqual({
+    value: "c2.example.test",
+    type: "domain",
+  });
+  const evidence = domain!.evidence[0]!;
+  expect(evidence.observedAt).toBe("2026-08-20T00:00:00.000Z");
+  expect(evidence.provenance.sourceRecordId).toBe("obs-1");
+  expect(evidence.data).toMatchObject({
+    tags: ["cobalt-strike"],
+    expiredTags: ["old-campaign"],
+    contextSources: ["AbuseCHMalwareBazaar"],
+  });
+  expect(evidence.data.malicious).toBeUndefined();
+
+  const [registry] = await feed.normalize({
+    id: "obs-2",
+    value: "HKLM\\Software\\Run\\x",
+    type: "registry_key",
+    modified: "2026-09-05T00:00:00Z",
+    // Older Yeti 2.x releases key tags by name.
+    tags: { persistence: { last_seen: "2026-07-01T00:00:00Z", fresh: true } },
+  });
+  expect(registry!.observable?.type).toBe("registry-key");
+  expect(registry!.evidence[0]!.data.tags).toEqual(["persistence"]);
+
+  for (const unsupported of [
+    { type: "file", value: "FILE:abc" },
+    { type: "hostname", value: "192.0.2.1" },
+    { type: "sha256", value: "not-a-hash" },
+  ])
+    expect(
+      await feed.normalize({
+        id: "obs-x",
+        modified: "2026-09-05T00:00:00Z",
+        ...unsupported,
+      }),
+    ).toEqual([]);
 });

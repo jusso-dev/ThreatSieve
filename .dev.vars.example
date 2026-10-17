@@ -5,6 +5,13 @@ OTX_API_KEY=
 VIRUSTOTAL_API_KEY=
 GREYNOISE_API_KEY=
 
+# Optional Yeti import; see docs/intelligence-sources.md#yeti.
+YETI_ENABLED=
+YETI_ENDPOINT=
+YETI_ALLOWED_HOST=
+YETI_API_KEY=
+YETI_TAGS=
+
 # Required for Better Auth; pnpm bootstrap generates a random local value.
 # Production: provision using wrangler secret put BETTER_AUTH_SECRET.
 BETTER_AUTH_SECRET=
