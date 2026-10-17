@@ -330,7 +330,6 @@ export class OptionalFeed extends PublicFeed {
    * used to step past a full page that shares one timestamp. */
   private async fetchYeti(cursor?: string): Promise<FeedBatch> {
     if (!this.config.apiKey) throw new Error("Yeti credential required");
-    const started = new Date().toISOString();
     const base = approvedEndpoint(this.config);
     const api = (path: string) =>
       new URL(base.pathname.replace(/\/+$/, "") + "/api/v2/" + path, base);
@@ -389,7 +388,13 @@ export class OptionalFeed extends PublicFeed {
       ? yetiTimestamp(YetiObservable.parse(records.at(-1)).modified)
       : undefined;
     if (records.length < count)
-      return { raw, records, cursor: last ?? resume.from ?? started };
+      // Never fall back to the worker clock: Yeti stamps `modified` with its
+      // own, so an empty first sync keeps the lower bound open.
+      return {
+        raw,
+        records,
+        cursor: last ?? resume.from ?? JSON.stringify({ page: 0 }),
+      };
     const stalled = resume.from !== undefined && last === resume.from;
     return {
       raw,

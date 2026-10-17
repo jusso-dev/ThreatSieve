@@ -423,3 +423,22 @@ it("maps Yeti observables without inventing maliciousness or unsupported types",
       }),
     ).toEqual([]);
 });
+it("keeps the Yeti lower bound open after an empty first sync", async () => {
+  const bodies: { query: Record<string, unknown> }[] = [];
+  const feed = new OptionalFeed(
+    "yeti",
+    "Synthetic Yeti",
+    repo,
+    yetiConfig,
+    async (input, init) => {
+      if (String(input).endsWith("/auth/api-token"))
+        return Response.json({ access_token: "jwt" });
+      bodies.push(JSON.parse(String(init!.body)));
+      return Response.json({ observables: [], total: 0 });
+    },
+  );
+  const first = await feed.fetch();
+  expect(JSON.parse(first.cursor)).toEqual({ page: 0 });
+  await feed.fetch(first.cursor);
+  expect(bodies.map((b) => b.query.modified)).toEqual([undefined, undefined]);
+});
