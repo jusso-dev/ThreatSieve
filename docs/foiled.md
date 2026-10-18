@@ -75,18 +75,31 @@ Relationship `assertion` keeps ThreatSieve's values: `observed`, `source_claimed
 
 ## Importing Foiled intelligence into ThreatSieve
 
-Foiled publishes its honeypot observations over TAXII 2.1. ThreatSieve can import them with the existing generic [TAXII feed adapter](taxii-misp.md#taxii--stix--misp-collection); no code change is needed.
+Foiled publishes its honeypot observations over TAXII 2.1. ThreatSieve imports them as an [additional TAXII source](taxii-misp.md#additional-taxii-sources), alongside the OpenCTI source that already uses the original `taxii` slot. No code change is needed.
 
-1. In Foiled, create a TAXII collection for ThreatSieve and a read-only credential for it. Put only objects marked TLP:CLEAR or TLP:GREEN, and only Foiled's own observations, in that collection. ThreatSieve's TAXII adapter does not read `object_marking_refs`, so TLP is enforced by what the collection exposes, as with the [OpenCTI reader](opencti.md#opencti-as-a-threatsieve-source). TLP:AMBER and TLP:RED objects must never be in it.
-2. Exclude objects that came from ThreatSieve (for example enrichments Foiled stored from `/v1/lookup`). Re-importing them would make ThreatSieve count its own data as independent corroboration.
-3. Set the API Worker values, using `wrangler secret put` for the token:
-   - `TAXII_ENABLED=true`
-   - `TAXII_ENDPOINT`: the collection's objects URL, for example `https://foiled.example.com/taxii2/<api-root>/collections/<collection-id>/objects/`
-   - `TAXII_ALLOWED_HOST`: the exact hostname in `TAXII_ENDPOINT`
-   - `TAXII_API_KEY`: the Foiled reader token, sent as a bearer token
-   - `TAXII_PAGE_LIMIT` (optional, 1–1000, default 100)
-4. Record Foiled's terms on the source row and enable the schedule, for example `UPDATE sources SET name='Foiled (TAXII 2.1)', license='Foiled honeypot intelligence, operator terms', redistributable=0, commercial_use=NULL, enabled=1 WHERE id='taxii'`. Then use **Sync now** (`POST /v1/feeds/taxii/sync`) or wait for the six-hourly schedule.
+1. In Foiled, create a TAXII collection for ThreatSieve and a read-only credential for it. Put only Foiled's own observations in it. Exclude anything Foiled obtained from ThreatSieve (such as enrichments stored from `/v1/lookup`): re-importing it would make ThreatSieve count its own data as independent corroboration.
+2. Mark objects with standard TLP markings. ThreatSieve imports only the TLP levels in the source's `tlp` allow-list (default TLP:CLEAR and TLP:GREEN) and skips unmarked objects unless `unmarked` is listed. Keep TLP:AMBER and TLP:RED out of the collection anyway, so the allow-list is a second control rather than the only one.
+3. Store the reader token as a Worker secret: `pnpm exec wrangler secret put TAXII_FOILED_API_KEY --name threatsieve-api-<stage>`.
+4. Add an entry to the `TAXII_SOURCES` Worker value:
 
-The endpoint must be HTTPS on an approved DNS name; redirects, IP literals and `.local` names are rejected. Imported records keep `redistributable: false` and Foiled's STIX `created_by_ref` as their original source, so they are never re-exported by ThreatSieve's own TAXII publication without an explicit decision, and the `taxii` independence group stops Foiled from being double-counted with itself.
+   ```json
+   [
+     {
+       "id": "taxii-foiled",
+       "name": "Foiled (TAXII 2.1)",
+       "endpoint": "https://foiled.example.com/taxii2/foiled/",
+       "collection": "<collection-id>",
+       "allowed_host": "foiled.example.com",
+       "api_key_secret": "TAXII_FOILED_API_KEY",
+       "tlp": ["clear", "green"],
+       "schedule": "6h",
+       "license": "Foiled honeypot intelligence, operator terms",
+       "redistributable": false,
+       "commercial_use": null
+     }
+   ]
+   ```
 
-There is one generic TAXII source. The production deployment already uses it for [OpenCTI](opencti.md#opencti-as-a-threatsieve-source). While OpenCTI holds it, either add Foiled to OpenCTI as a TAXII feed (OpenCTI then applies its TLP group filter before the data reaches ThreatSieve), or add a second TAXII source to ThreatSieve, which is a code change.
+5. Deploy. The `taxii-foiled` source row is created on the next feed listing, Sync now or scheduled run. Use **Sync now** (`POST /v1/feeds/taxii-foiled/sync`) or wait for the six-hourly schedule.
+
+The endpoint must be HTTPS on the approved hostname; redirects, IP literals and `.local` names are rejected. Imported records keep `redistributable: false` and Foiled's STIX `created_by_ref` as their original source, so ThreatSieve's own TAXII publication never re-exports them without an explicit decision. The source has its own `taxii-foiled` independence group, so Foiled is not double-counted with itself, and tenants can exclude it with `PUT /v1/feeds/taxii-foiled/policy`.

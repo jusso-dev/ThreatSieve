@@ -167,7 +167,7 @@ Each result has:
 | `found` | ThreatSieve holds at least one reputation, CVE or relationship fact, or a visible entity. Network context alone does not set it |
 | `entity_id` | The visible observable ID (`obs_…`), otherwise `null` |
 | `ttl_seconds` | Shortest reuse time among contributing sources; 3600 when nothing is known; at most 300 while `pending_sources` is non-empty |
-| `pending_sources` | Rate-limited sources being fetched after this response. Ask again after a short wait |
+| `pending_sources` | Rate-limited sources being fetched by a queued refresh, or waiting for the next lookup because this request's per-source cap was reached. Ask again after a short wait. Sources whose daily budget is spent are not listed |
 | `reputation` | `classification` (`malicious`, `suspicious`, `benign`, `unknown`), `score` and `confidence` (0–100 `dossier-v1` heuristics, `null` when unknown), `scanner` and `tags`. `null` for CVEs and when no evidence exists |
 | `network` | `asn`, `as_org`, `prefix` (largest CIDR inside the announced range) and `country` from the IPtoASN dataset; for `asn` lookups `prefix` is `null` |
 | `cve` | NVD description, status, CVSS, CWE, references and affected products; CISA KEV listing; FIRST EPSS; OSV identifiers |
@@ -176,6 +176,8 @@ Each result has:
 
 Reputation classification is a fixed rule over source assertions: malicious and benign assertions together give `suspicious`; a malicious assertion gives `malicious`; a benign assertion or benign service gives `benign`; scanning activity alone gives `suspicious`. `score` and `confidence` are the [`dossier-v1`](confidence-model.md#dossier-scoring-dossier-v1) threat and confidence heuristics without customer context. Analyst assessments are not consulted. `scanner.source_id` names the first contributing scanner source, preferring GreyNoise, then CrowdSec.
 
-Tenant source policy applies to every section: a source a tenant has excluded contributes no evidence, network, CVE or relationship fact, and is not refreshed for that tenant. Private observables of other tenants remain invisible. GreyNoise, CrowdSec and OSV answers are cached in `source_lookup_cache`, not in the shared graph, so a lookup does not make a value searchable by other tenants. `redistributable` is true only when the source record allows redistribution and every contributing record was marked redistributable.
+Tenant source policy applies to every section: a source a tenant has excluded contributes no evidence, network, CVE or relationship fact, and is not refreshed for that tenant. Private observables of other tenants remain invisible. GreyNoise, CrowdSec and OSV answers are cached in `source_lookup_cache`, not in the shared graph, so a lookup does not make a value searchable by other tenants. GreyNoise and CrowdSec answers are cached per tenant, so another tenant's lookups, their timing and their pending state are never visible. OSV answers are public advisory data, cached once for all tenants and reported without `retrieved_at`.
+
+A lookup uses a fixed number of D1 statements, independent of the number of observables: daily budgets are read in one query, cache misses are claimed in one statement per source, and refreshes are queued as one enrich-queue job per source. Queued refreshes retry with backoff; a refresh that still fails on its last attempt is cached as an error for 15 minutes and its budget unit is refunded. `redistributable` is true only when the source record allows redistribution and every contributing record was marked redistributable.
 
 Results are deterministic for the same stored data and time; `as_of` is the response time. The recency part of `score` and `confidence` depends on the current time.

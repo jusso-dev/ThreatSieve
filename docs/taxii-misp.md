@@ -32,6 +32,38 @@ Optional feed adapters are wired into the existing source-sync, R2 archive, norm
 
 Endpoints require HTTPS, exact approved hostnames and no redirects. They are deployment configuration, never taken from threat-report text. These adapters import shared threat intelligence; do not configure tenant-private telemetry as a global feed. Enable the corresponding source's scheduler flag after reviewing its terms, or use Sync now. Credentials are not returned to the frontend.
 
+### Additional TAXII sources
+
+The `TAXII_*` values configure one source (`taxii`), which the production deployment uses for OpenCTI. Further TAXII 2.1 sources are configured as a JSON array in the `TAXII_SOURCES` Worker value. Each entry becomes its own source with its own checkpoint, sync lock, independence group, licence record and schedule; the `taxii` slot is unchanged.
+
+```json
+[
+  {
+    "id": "taxii-foiled",
+    "name": "Foiled (TAXII 2.1)",
+    "endpoint": "https://foiled.example.com/taxii2/foiled/",
+    "collection": "<collection-id>",
+    "allowed_host": "foiled.example.com",
+    "api_key_secret": "TAXII_FOILED_API_KEY",
+    "tlp": ["clear", "green"],
+    "page_limit": 100,
+    "schedule": "6h",
+    "license": "Foiled honeypot intelligence, operator terms",
+    "redistributable": false,
+    "commercial_use": null
+  }
+]
+```
+
+- `id` must match `taxii-<name>` (lowercase letters, digits and hyphens). The source row is created on first use with reliability 0.5 and the given licence fields; later edits to the row are kept.
+- `endpoint` is the collection's objects URL, or the API root URL when `collection` is set (the objects URL is then `<root>/collections/<collection>/objects/`). It must be HTTPS on `allowed_host`; redirects, IP literals and `.local` names are rejected.
+- `api_key_secret` names the Worker secret holding the bearer token, and must look like `TAXII_<NAME>_API_KEY` or `TAXII_<NAME>_TOKEN`. Provision it with `wrangler secret put`. If it is named but missing, the source stays disabled.
+- `tlp` is the allow-list of TLP markings to import: `clear` (or `white`), `green`, `amber`, `amber+strict`, `red`, `unmarked`. Default `["clear","green"]`. ThreatSieve recognises the standard STIX 2.1 TLP 1.0 and TLP 2.0 marking-definition IDs in `object_marking_refs`; an object takes its most restrictive TLP marking, and objects with no recognised TLP marking count as `unmarked`. Objects outside the list are skipped, not imported. The original `taxii` slot does not filter markings.
+- `schedule` is `6h` (each six-hourly run), `daily` (at most once in 20 hours) or `manual` (Sync now only).
+- Imported records are always stored as non-redistributable, with the STIX `created_by_ref` as their original producer.
+
+Invalid entries are skipped and logged, never partially applied.
+
 To import a Foiled honeypot collection, including how TLP and redistribution are handled, see [Foiled](foiled.md#importing-foiled-intelligence-into-threatsieve).
 
 TAXII next tokens and original `added_after` survive checkpoints. A page is committed only after its processing jobs finish; further pages enqueue another sync. Missing/repeating continuation tokens fail instead of silently losing records. OTX pagination follows numeric page tokens only on its pinned endpoint.
