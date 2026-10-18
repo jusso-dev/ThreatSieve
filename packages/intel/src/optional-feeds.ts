@@ -10,6 +10,7 @@ import type {
   ObservableType,
 } from "../../schemas/src/index";
 import { parseIndicators } from "./upload";
+import { tlpAllowed, type TlpLevel } from "./taxii-sources";
 export interface OptionalFeedConfig {
   enabled: boolean;
   apiKey?: string;
@@ -20,6 +21,8 @@ export interface OptionalFeedConfig {
   pageLimit?: number;
   /** Yeti only: import observables carrying all of these tags. */
   tags?: string[];
+  /** TAXII only: import objects whose TLP marking is in this list. */
+  tlp?: TlpLevel[];
 }
 function approvedEndpoint(config: OptionalFeedConfig): URL {
   if (!config.endpoint || !config.allowedHost)
@@ -86,22 +89,35 @@ function observationDate(
   const date = new Date(typeof value === "number" ? value * 1000 : value);
   return Number.isFinite(date.getTime()) ? date.toISOString() : undefined;
 }
+function withSourceUrl(record: NormalizedIntelRecord, sourceUrl: string) {
+  record.provenance = { ...record.provenance, sourceUrl };
+  record.evidence = record.evidence.map((e) => ({
+    ...e,
+    provenance: { ...e.provenance, sourceUrl },
+  }));
+}
 export class OptionalFeed extends PublicFeed {
   constructor(
     id:
       | "otx"
       | "virustotal"
       | "greynoise"
+      | "crowdsec"
       | "taxii"
       | "stix"
       | "misp-feed"
-      | "yeti",
+      | "yeti"
+      | `taxii-${string}`,
     name: string,
     repo: Repository,
     private config: OptionalFeedConfig,
     request: typeof fetch = (input, init) => fetch(input, init),
   ) {
     super(id, name, repo, {}, request);
+  }
+  /** Additional TAXII sources (`taxii-<name>`) behave like the `taxii` slot. */
+  private get kind() {
+    return this.id.startsWith("taxii-") ? "taxii" : this.id;
   }
   override async healthCheck(): Promise<FeedHealth> {
     return {
@@ -172,9 +188,20 @@ export class OptionalFeed extends PublicFeed {
         "https://api.greynoise.io/v3/community/" + obs.normalizedValue,
       );
       headers.key = this.config.apiKey;
+    } else if (this.id === "crowdsec") {
+      if (!this.config.apiKey || !cursor)
+        throw new Error("CrowdSec credential and IP required");
+      const obs = await normalise(cursor);
+      if (obs.type !== "ipv4" && obs.type !== "ipv6")
+        throw new Error("CrowdSec CTI requires an IP address");
+      url = new URL(
+        "https://cti.api.crowdsec.net/v2/smoke/" +
+          encodeURIComponent(obs.normalizedValue),
+      );
+      headers["x-api-key"] = this.config.apiKey;
     } else {
       url = approvedEndpoint(this.config);
-      if (this.id === "taxii") {
+      if (this.kind === "taxii") {
         headers.Accept = "application/taxii+json;version=2.1";
         if (resume?.from || (cursor && !resume))
           url.searchParams.set(
@@ -192,6 +219,14 @@ export class OptionalFeed extends PublicFeed {
       redirect: "manual",
       signal: AbortSignal.timeout(30000),
     });
+    // Per-IP lookups answer 404 for addresses the provider has not seen.
+    if (
+      response.status === 404 &&
+      ["greynoise", "crowdsec", "virustotal"].includes(this.id)
+    ) {
+      await response.body?.cancel();
+      return { raw: null, records: [], cursor: started };
+    }
     if (!response.ok) throw new Error("Provider HTTP " + response.status);
     const text = await boundedText(response, 8 * 1024 * 1024);
     let raw: unknown;
@@ -210,7 +245,7 @@ export class OptionalFeed extends PublicFeed {
         records = z
           .object({ results: z.array(z.unknown()) })
           .parse(raw).results;
-      else if (this.id === "taxii")
+      else if (this.kind === "taxii")
         records = z
           .object({
             objects: z.array(z.unknown()),
@@ -265,7 +300,7 @@ export class OptionalFeed extends PublicFeed {
         }));
       } else records = [{ raw, observable: cursor }];
     }
-    if (this.id === "taxii") {
+    if (this.kind === "taxii") {
       const page = z
         .object({
           more: z.boolean().default(false),
@@ -409,8 +444,11 @@ export class OptionalFeed extends PublicFeed {
   }
   override async normalize(input: unknown): Promise<NormalizedIntelRecord[]> {
     const provenance = providerProvenance(this.id, this.name);
-    if (this.id === "stix" || this.id === "taxii")
+    if (this.id === "stix" || this.kind === "taxii") {
+      // Objects outside the source's TLP allow-list are skipped, not imported.
+      if (this.config.tlp && !tlpAllowed(input, this.config.tlp)) return [];
       return stixRecord(input, provenance);
+    }
     const now = new Date().toISOString();
     const make = async (
       value: string,
@@ -521,23 +559,114 @@ export class OptionalFeed extends PublicFeed {
             .passthrough(),
         })
         .parse(input);
-      return [
-        await make(
-          item.observable,
-          {
-            ...item.raw,
-            role: item.raw.noise ? "scanning" : "unknown",
-            malicious:
-              item.raw.classification === "malicious"
-                ? true
-                : item.raw.riot
-                  ? false
-                  : undefined,
+      const name =
+        item.raw.name && item.raw.name !== "unknown" ? item.raw.name : null;
+      const record = await make(
+        item.observable,
+        {
+          ...item.raw,
+          role: item.raw.noise ? "scanning" : "unknown",
+          malicious:
+            item.raw.classification === "malicious"
+              ? true
+              : item.raw.riot
+                ? false
+                : undefined,
+          // noise: seen scanning the internet; riot: a known business service.
+          scanner: {
+            isScanner: item.raw.noise,
+            benignService:
+              item.raw.riot || item.raw.classification === "benign",
+            name,
           },
-          item.raw.ip,
-          item.raw.last_seen,
-        ),
-      ];
+        },
+        item.raw.ip,
+        item.raw.last_seen,
+      );
+      const link = z
+        .url()
+        .regex(/^https:\/\/viz\.greynoise\.io\//)
+        .safeParse(item.raw.link);
+      if (link.success) withSourceUrl(record, link.data);
+      return [record];
+    }
+    if (this.id === "crowdsec") {
+      const Named = z
+        .object({ name: z.string(), label: z.string().optional() })
+        .passthrough();
+      const item = z
+        .object({
+          observable: z.string(),
+          raw: z
+            .object({
+              ip: z.string(),
+              reputation: z.string().optional(),
+              confidence: z.string().optional(),
+              as_name: z.string().nullish(),
+              behaviors: z.array(Named).default([]),
+              classifications: z
+                .object({
+                  false_positives: z.array(Named).default([]),
+                  classifications: z.array(Named).default([]),
+                })
+                .partial()
+                .default({}),
+              history: z
+                .object({
+                  first_seen: z.string().nullish(),
+                  last_seen: z.string().nullish(),
+                })
+                .partial()
+                .nullish(),
+              background_noise: z.string().nullish(),
+            })
+            .passthrough(),
+        })
+        .parse(input);
+      const raw = item.raw;
+      const benign = raw.classifications.false_positives ?? [];
+      const labels = raw.classifications.classifications ?? [];
+      const scannerLabels = labels.filter((c) => c.name.startsWith("scanner:"));
+      const isScanner =
+        scannerLabels.length > 0 ||
+        raw.behaviors.some((b) => /scan/i.test(b.name));
+      const record = await make(
+        item.observable,
+        {
+          description: "CrowdSec CTI smoke lookup",
+          reputation: raw.reputation,
+          crowdsecConfidence: raw.confidence,
+          backgroundNoise: raw.background_noise,
+          behaviors: raw.behaviors.map((b) => b.name),
+          classifications: labels.map((c) => c.name),
+          falsePositives: benign.map((c) => c.name),
+          tags: [
+            ...new Set([...raw.behaviors, ...labels].map((b) => b.name)),
+          ].sort(),
+          role: isScanner ? "scanning" : "unknown",
+          malicious:
+            raw.reputation === "malicious"
+              ? true
+              : raw.reputation === "benign" || raw.reputation === "safe"
+                ? false
+                : undefined,
+          scanner: {
+            isScanner,
+            benignService:
+              benign.length > 0 ||
+              raw.reputation === "benign" ||
+              raw.reputation === "safe",
+            name: scannerLabels[0]?.label ?? benign[0]?.label ?? null,
+          },
+        },
+        raw.ip,
+        raw.history?.last_seen ?? undefined,
+      );
+      withSourceUrl(
+        record,
+        "https://app.crowdsec.net/cti/" + encodeURIComponent(raw.ip),
+      );
+      return [record];
     }
     if (this.id === "yeti") {
       const item = YetiObservable.parse(input);

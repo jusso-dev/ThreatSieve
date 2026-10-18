@@ -18,6 +18,7 @@ curl -X POST http://127.0.0.1:8787/v1/assess \
 | `POST /v1/assessments/:id/{confirm,reject,modify,investigate,reclassify}`                         | assessment:write     |
 | `GET /v1/assessments/:id/stix`                                                                    | assessment:read      |
 | `GET /v1/observables/:id`                                                                         | intel:read           |
+| `POST /v1/lookup` ([bulk lookup](#bulk-lookup))                                                   | intel:read           |
 | `GET /v1/actors`, `/v1/malware`, `/v1/campaigns`, `/v1/attack/techniques` and their `/:id` routes | intel:read           |
 | `GET /v1/search?q=`, `GET /v1/graph/:id?depth=1..3`                                               | intel:read           |
 | `GET /v1/clusters`, `GET /v1/clusters/:id`                                                        | intel:read           |
@@ -41,7 +42,7 @@ Feedback requires `{ "reason": "Validated against source evidence", "field": "as
 
 Assessments retain `schema_version`, observable, maliciousness probability/classification, role, confidence factors, ATT&CK mappings, potential actor associations, structured customer relevance, recommendations, evidence, provenance and full runs. `demo: true` labels synthetic records. Do not interpret `actors` as verified attribution or automatically execute `recommended_actions`.
 
-Errors use `{ "error": { "code", "message", "request_id" } }`. Validation errors can also include field issues. Common codes: UNAUTHORIZED, FORBIDDEN, NOT_FOUND, VALIDATION_ERROR, INVALID_OBSERVABLE, RATE_LIMITED, AI_BUDGET_EXHAUSTED, FEED_DISABLED.
+Errors use `{ "error": { "code", "message", "request_id" } }`. Validation errors can also include field issues. Common codes: UNAUTHORIZED, FORBIDDEN, NOT_FOUND, VALIDATION_ERROR, INVALID_OBSERVABLE, RATE_LIMITED, AI_BUDGET_EXHAUSTED, FEED_DISABLED, FEED_NOT_SYNCABLE, TOO_MANY_OBSERVABLES. Every 429 carries `Retry-After` in seconds; rate-limit windows are calendar minutes.
 
 Entity lists default to 50 and cap at 100 records. Graph depth caps at three, nodes at 100 and edges at 200. The graph response indicates truncation. Intelligence search does exact canonical/alias lookup plus bounded prefix search; it is not a semantic answer generator.
 
@@ -140,3 +141,43 @@ Graph filters now accept `confidence` (0–1), `source`, `relationship`, `entity
 TAXII protocol endpoints, content types and pagination are documented in [TAXII/MISP](taxii-misp.md). Structured schemas are in `packages/schemas/src/enterprise.ts`.
 
 Entity tags are tenant-scoped: `POST /v1/entities/:id/tags` accepts `{ "tag": "priority-hunt", "operation": "add", "reason": "Hunt scope" }` (`remove` is also supported). Dossiers return `workspaceTags`. Automatic watchlist memberships appear in match results as `automatic_member`; `DELETE /v1/watchlists/:id/members/:entityId` removes that membership with an audit event. These mutations require `assessment:write`.
+
+## Bulk lookup
+
+`POST /v1/lookup` answers up to 500 observables from stored intelligence in one synchronous call. It is built for integrations such as [Foiled](foiled.md) that need context, not a new assessment. It never calls Workers AI or a paid model, and it does not create observables, assessments or audit events.
+
+```sh
+curl -X POST http://127.0.0.1:8787/v1/lookup \
+  -H "Authorization: Bearer $THREATSIEVE_API_KEY" \
+  -H 'Content-Type: application/json' \
+  -d '{"observables":[{"type":"ipv4","value":"203.0.113.7"},{"type":"cve","value":"CVE-2099-0001"}],"include":["reputation","network","cve","relationships"]}'
+```
+
+- Scope `intel:read`. The route has its own rate-limit bucket: `LOOKUP_RATE_LIMIT` requests per minute per key (default 60) and five times that per tenant. Assessment traffic does not consume it.
+- `type` is one of `ipv4`, `ipv6`, `domain`, `url`, `md5`, `sha1`, `sha256`, `cve`, `asn`. Values are normalised as for deduplication: lowercase domains, canonical IPv6, upper-case CVE IDs, `AS<number>`.
+- `include` selects `reputation`, `network`, `cve` and `relationships`; it defaults to all four.
+- More than 500 observables returns 413 `TOO_MANY_OBSERVABLES`. The body is limited to 4 MiB. An unsupported `type` is a 400 `VALIDATION_ERROR`.
+- Duplicates (after normalisation) are answered once, in first-seen order. A value that fails normalisation gets its own result with `error.code` `INVALID_OBSERVABLE` and `found: false`; the rest of the request still succeeds.
+
+Each result has:
+
+| Field | Meaning |
+| --- | --- |
+| `type`, `value`, `input` | Type, normalised value, and the first submitted spelling |
+| `found` | ThreatSieve holds at least one reputation, CVE or relationship fact, or a visible entity. Network context alone does not set it |
+| `entity_id` | The visible observable ID (`obs_…`), otherwise `null` |
+| `ttl_seconds` | Shortest reuse time among contributing sources; 3600 when nothing is known; at most 300 while `pending_sources` is non-empty |
+| `pending_sources` | Rate-limited sources being fetched by a queued refresh, or waiting for the next lookup because this request's per-source cap was reached. Ask again after a short wait. Sources whose daily budget is spent are not listed |
+| `reputation` | `classification` (`malicious`, `suspicious`, `benign`, `unknown`), `score` and `confidence` (0–100 `dossier-v1` heuristics, `null` when unknown), `scanner` and `tags`. `null` for CVEs and when no evidence exists |
+| `network` | `asn`, `as_org`, `prefix` (largest CIDR inside the announced range) and `country` from the IPtoASN dataset; for `asn` lookups `prefix` is `null` |
+| `cve` | NVD description, status, CVSS, CWE, references and affected products; CISA KEV listing; FIRST EPSS; OSV identifiers |
+| `relationships` | Up to 25 visible relationships: `type` in lowercase with hyphens (`indicates`, `hosted-on`), `direction`, `assertion`, `confidence` 0–100, `source_id` and the other entity with `external_ids` |
+| `sources` | Every source behind a returned fact, with `license`, `redistributable`, `commercial_use` (`null` when unknown), tenant-adjusted `reliability`, `first_seen`, `last_seen`, `retrieved_at` and `source_url` |
+
+Reputation classification is a fixed rule over source assertions: malicious and benign assertions together give `suspicious`; a malicious assertion gives `malicious`; a benign assertion or benign service gives `benign`; scanning activity alone gives `suspicious`. `score` and `confidence` are the [`dossier-v1`](confidence-model.md#dossier-scoring-dossier-v1) threat and confidence heuristics without customer context. Analyst assessments are not consulted. `scanner.source_id` names the first contributing scanner source, preferring GreyNoise, then CrowdSec.
+
+Tenant source policy applies to every section: a source a tenant has excluded contributes no evidence, network, CVE or relationship fact, and is not refreshed for that tenant. Private observables of other tenants remain invisible. GreyNoise, CrowdSec and OSV answers are cached in `source_lookup_cache`, not in the shared graph, so a lookup does not make a value searchable by other tenants. GreyNoise and CrowdSec answers are cached per tenant, so another tenant's lookups, their timing and their pending state are never visible. OSV answers are public advisory data, cached once for all tenants and reported without `retrieved_at`.
+
+A lookup uses a fixed number of D1 statements, independent of the number of observables: daily budgets are read in one query, cache misses are claimed in one statement per source, and refreshes are queued as one enrich-queue job per source. Queued refreshes retry with backoff; a refresh that still fails on its last attempt is cached as an error for 15 minutes and its budget unit is refunded. `redistributable` is true only when the source record allows redistribution and every contributing record was marked redistributable.
+
+Results are deterministic for the same stored data and time; `as_of` is the response time. The recency part of `score` and `confidence` depends on the current time.

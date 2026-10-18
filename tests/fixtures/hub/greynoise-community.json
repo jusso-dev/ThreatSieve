@@ -1,0 +1,28 @@
+{
+  "noise": {
+    "ip": "198.51.100.7",
+    "noise": true,
+    "riot": false,
+    "classification": "unknown",
+    "name": "Example Scanner",
+    "link": "https://viz.greynoise.io/ip/198.51.100.7",
+    "last_seen": "2099-01-02",
+    "message": "Success"
+  },
+  "riot": {
+    "ip": "1.0.0.1",
+    "noise": false,
+    "riot": true,
+    "classification": "benign",
+    "name": "Cloudflare",
+    "link": "https://viz.greynoise.io/riot/1.0.0.1",
+    "last_seen": "2099-01-02",
+    "message": "Success"
+  },
+  "not_observed": {
+    "ip": "203.0.113.9",
+    "noise": false,
+    "riot": false,
+    "message": "IP not observed scanning the internet."
+  }
+}

@@ -27,6 +27,10 @@ import { processBulk } from "./upload";
 import { enrichEntity } from "../enrich/index";
 import { backfillVectors } from "../enrich/backfill";
 import { correlate } from "../correlate/index";
+import {
+  LookupJobSchema,
+  processLookupJob,
+} from "../../packages/intel/src/source-lookups";
 
 export function makeJob(
   stage: PipelineJob["stage"],
@@ -123,6 +127,22 @@ export async function processJob(env: AppEnv, job: PipelineJob) {
       return;
     }
     case "enrich":
+      if (job.payload.mode === "source-lookup") {
+        const attempt = await env.DB.prepare(
+          "SELECT attempt FROM pipeline_jobs WHERE id=?",
+        )
+          .bind(job.jobId)
+          .first<number>("attempt");
+        await repo.finish(
+          job,
+          await processLookupJob(
+            env,
+            LookupJobSchema.parse(job.payload),
+            attempt ?? 1,
+          ),
+        );
+        return;
+      }
       if (job.payload.mode === "vector-backfill") {
         await backfillVectors(env, job);
         return;

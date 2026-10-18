@@ -1,0 +1,41 @@
+{
+  "ip": "198.51.100.7",
+  "ip_range": "198.51.100.0/25",
+  "as_name": "EXAMPLE-SCANNER-NET",
+  "as_num": 64497,
+  "location": { "country": "NL" },
+  "reverse_dns": null,
+  "behaviors": [
+    {
+      "name": "ssh:bruteforce",
+      "label": "SSH Bruteforce",
+      "description": "Synthetic"
+    },
+    { "name": "tcp:scan", "label": "TCP Scan", "description": "Synthetic" }
+  ],
+  "history": {
+    "first_seen": "2098-12-01T00:00:00+00:00",
+    "last_seen": "2099-01-02T12:00:00+00:00",
+    "full_age": 33,
+    "days_age": 32
+  },
+  "classifications": {
+    "false_positives": [],
+    "classifications": [
+      { "name": "community-blocklist", "label": "CrowdSec Community Blocklist" }
+    ]
+  },
+  "background_noise": "high",
+  "background_noise_score": 9,
+  "scores": {
+    "overall": {
+      "aggressiveness": 4,
+      "threat": 3,
+      "trust": 4,
+      "anomaly": 1,
+      "total": 4
+    }
+  },
+  "reputation": "malicious",
+  "confidence": "high"
+}

@@ -67,6 +67,17 @@ import {
 import { parseIndicators } from "../../../workers/ingest/upload";
 import { submitBulk } from "../../../workers/ingest/submission";
 import { exportStix } from "../../../packages/stix/src/index";
+import { lookupObservables } from "../../../packages/enterprise/src/lookup";
+import { LOOKUP_MAX_OBSERVABLES } from "../../../packages/schemas/src/lookup";
+import {
+  ensureTaxiiSources,
+  taxiiSourceConfigs,
+} from "../../../packages/intel/src/taxii-sources";
+import {
+  DATASET_SOURCES,
+  LOOKUP_ONLY_SOURCES,
+  runScheduledDatasets,
+} from "../../../workers/feed-sync/datasets";
 
 type Context = {
   Bindings: AppEnv;
@@ -112,6 +123,12 @@ app.onError((error, c) => {
         },
       },
       400,
+    );
+  if (error instanceof AppError && error.status === 429)
+    // Rate-limit windows are calendar minutes.
+    c.header(
+      "Retry-After",
+      String(Math.max(1, 60 - Math.floor((Date.now() / 1000) % 60))),
     );
   if (error instanceof AppError)
     return c.json(
@@ -294,7 +311,23 @@ app.use("/v1/*", async (c, next) => {
       ? await authenticate(c.env.DB, c.req.raw)
       : await authenticateSession(c.env, c.req.raw);
   c.set("principal", p);
-  await rateLimit(c.env.DB, p);
+  // Lookups have their own bucket so bulk lookup traffic cannot starve
+  // assessments, and the reverse.
+  if (c.req.path === "/v1/lookup")
+    await rateLimit(
+      c.env.DB,
+      p,
+      z.coerce
+        .number()
+        .int()
+        .min(1)
+        .max(10000)
+        .catch(60)
+        .parse(c.env.LOOKUP_RATE_LIMIT ?? 60),
+      Date.now(),
+      "lookup",
+    );
+  else await rateLimit(c.env.DB, p);
   if (
     p.kind === "session" &&
     !["GET", "HEAD", "OPTIONS"].includes(c.req.method) &&
@@ -679,6 +712,26 @@ app.get("/v1/assessments/:id/stix", scope("assessment:read"), async (c) => {
     "Content-Disposition": `attachment; filename="${a.assessment_id}.stix.json"`,
   });
 });
+app.post("/v1/lookup", scope("intel:read"), async (c) => {
+  const body = await json(c, 4 * 1024 * 1024);
+  const observables =
+    body && typeof body === "object" && "observables" in body
+      ? (body as { observables: unknown }).observables
+      : undefined;
+  if (Array.isArray(observables) && observables.length > LOOKUP_MAX_OBSERVABLES)
+    throw new AppError(
+      "TOO_MANY_OBSERVABLES",
+      413,
+      "A lookup accepts at most " + LOOKUP_MAX_OBSERVABLES + " observables",
+    );
+  return c.json(
+    await lookupObservables(c.env, c.get("principal"), body, {
+      // Refresh jobs are durable in the outbox; this only speeds delivery.
+      dispatch: () =>
+        c.executionCtx.waitUntil(dispatchOutbox(c.env).catch(() => 0)),
+    }),
+  );
+});
 app.get("/v1/observables/:id", scope("intel:read"), async (c) => {
   const repo = new Repository(c.env.DB);
   if (!(await repo.visible(c.get("principal").tenantId, c.req.param("id")!)))
@@ -986,6 +1039,7 @@ app.get("/v1/clusters/:id", scope("intel:read"), async (c) => {
   });
 });
 app.get("/v1/feeds", scope("feeds:read"), async (c) => {
+  await ensureTaxiiSources(c.env.DB, taxiiSourceConfigs(c.env));
   const rows = await c.env.DB.prepare(
     "SELECT * FROM sources WHERE id NOT IN ('customer','analyst','upload','demo') ORDER BY id",
   ).all<{ id: string; enabled: number; status: string }>();
@@ -1016,6 +1070,19 @@ app.get("/v1/feeds/:id/health", scope("feeds:read"), async (c) => {
 });
 app.post("/v1/feeds/:id/sync", scope("feeds:write"), async (c) => {
   const id = c.req.param("id")!;
+  if (
+    (DATASET_SOURCES as readonly string[]).includes(id) ||
+    (LOOKUP_ONLY_SOURCES as readonly string[]).includes(id)
+  )
+    throw new AppError(
+      "FEED_NOT_SYNCABLE",
+      409,
+      (DATASET_SOURCES as readonly string[]).includes(id)
+        ? "This dataset is imported on a schedule"
+        : "This source is queried on demand by POST /v1/lookup",
+    );
+  if (id.startsWith("taxii-"))
+    await ensureTaxiiSources(c.env.DB, taxiiSourceConfigs(c.env));
   let feed;
   try {
     feed = getFeed(c.env, id);
@@ -1398,10 +1465,39 @@ export default {
     ctx.waitUntil(
       (async () => {
         if (event.cron === "17 */6 * * *") {
+          const taxii = taxiiSourceConfigs(env);
+          await ensureTaxiiSources(env.DB, taxii);
           const sources = await env.DB.prepare(
-            "SELECT id FROM sources WHERE enabled=1 AND id IN ('mitre','threatfox','misp','urlhaus','feodo','cisa-kev','taxii','stix','misp-feed','otx','yeti')",
-          ).all<{ id: string }>();
+            "SELECT id,last_sync FROM sources WHERE enabled=1 AND id IN (SELECT value FROM json_each(?))",
+          )
+            .bind(
+              JSON.stringify([
+                ...[
+                  "mitre",
+                  "threatfox",
+                  "misp",
+                  "urlhaus",
+                  "feodo",
+                  "cisa-kev",
+                  "taxii",
+                  "stix",
+                  "misp-feed",
+                  "otx",
+                  "yeti",
+                ],
+                ...taxii.filter((t) => t.schedule !== "manual").map((t) => t.id),
+              ]),
+            )
+            .all<{ id: string; last_sync: string | null }>();
           for (const source of sources.results) {
+            const daily =
+              taxii.find((t) => t.id === source.id)?.schedule === "daily";
+            if (
+              daily &&
+              source.last_sync &&
+              Date.now() - Date.parse(source.last_sync) < 20 * 3600000
+            )
+              continue;
             if (
               (await getFeed(env, source.id).healthCheck()).status ===
               "disabled"
@@ -1424,5 +1520,8 @@ export default {
         await recordMaintenanceHeartbeat(env);
       })(),
     );
+    // Reference datasets for /v1/lookup run separately so a slow import
+    // never delays pipeline maintenance.
+    ctx.waitUntil(runScheduledDatasets(env, event.cron));
   },
 } satisfies ExportedHandler<AppEnv, unknown>;

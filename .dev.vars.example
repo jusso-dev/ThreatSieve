@@ -4,6 +4,9 @@ URLHAUS_AUTH_KEY=
 OTX_API_KEY=
 VIRUSTOTAL_API_KEY=
 GREYNOISE_API_KEY=
+CROWDSEC_API_KEY=
+# Optional; raises NVD API rate limits. See docs/intelligence-sources.md#nvd.
+NVD_API_KEY=
 
 # Optional Yeti import; see docs/intelligence-sources.md#yeti.
 YETI_ENABLED=

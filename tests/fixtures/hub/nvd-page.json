@@ -1,0 +1,125 @@
+{
+  "resultsPerPage": 3,
+  "startIndex": 0,
+  "totalResults": 3,
+  "format": "NVD_CVE",
+  "version": "2.0",
+  "timestamp": "2099-01-04T00:00:00.000",
+  "vulnerabilities": [
+    {
+      "cve": {
+        "id": "CVE-2099-0001",
+        "sourceIdentifier": "cna@example.test",
+        "published": "2099-01-01T00:00:00.000",
+        "lastModified": "2099-01-03T10:00:00.000",
+        "vulnStatus": "Analyzed",
+        "descriptions": [
+          { "lang": "es", "value": "Recorrido de ruta sintético." },
+          {
+            "lang": "en",
+            "value": "Synthetic path traversal in Example Demo App before 1.0.1."
+          }
+        ],
+        "metrics": {
+          "cvssMetricV40": [
+            {
+              "source": "cna@example.test",
+              "type": "Secondary",
+              "cvssData": {
+                "version": "4.0",
+                "vectorString": "CVSS:4.0/AV:N/AC:L/AT:N/PR:N/UI:N/VC:H/VI:H/VA:H/SC:N/SI:N/SA:N",
+                "baseScore": 9.3
+              }
+            }
+          ],
+          "cvssMetricV31": [
+            {
+              "source": "nvd@nist.gov",
+              "type": "Primary",
+              "cvssData": {
+                "version": "3.1",
+                "vectorString": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:H/A:H",
+                "baseScore": 9.8
+              }
+            }
+          ]
+        },
+        "weaknesses": [
+          {
+            "source": "nvd@nist.gov",
+            "type": "Primary",
+            "description": [
+              { "lang": "en", "value": "CWE-22" },
+              { "lang": "en", "value": "NVD-CWE-noinfo" }
+            ]
+          }
+        ],
+        "configurations": [
+          {
+            "nodes": [
+              {
+                "operator": "OR",
+                "negate": false,
+                "cpeMatch": [
+                  {
+                    "vulnerable": true,
+                    "criteria": "cpe:2.3:a:example:demo-app:*:*:*:*:*:*:*:*",
+                    "versionEndExcluding": "1.0.1",
+                    "matchCriteriaId": "00000000-0000-0000-0000-000000000001"
+                  },
+                  {
+                    "vulnerable": false,
+                    "criteria": "cpe:2.3:o:example:demo-os:-:*:*:*:*:*:*:*",
+                    "matchCriteriaId": "00000000-0000-0000-0000-000000000002"
+                  }
+                ]
+              }
+            ]
+          }
+        ],
+        "references": [
+          {
+            "url": "https://example.test/advisories/demo-app",
+            "source": "cna@example.test",
+            "tags": ["Vendor Advisory"]
+          },
+          { "url": "ftp://example.test/ignored", "source": "cna@example.test" }
+        ]
+      }
+    },
+    {
+      "cve": {
+        "id": "CVE-2099-0002",
+        "published": "2099-01-02T00:00:00.000",
+        "lastModified": "2099-01-02T00:00:00.000",
+        "vulnStatus": "Awaiting Analysis",
+        "descriptions": [
+          { "lang": "en", "value": "Synthetic issue awaiting analysis." }
+        ],
+        "metrics": {},
+        "affected": [
+          {
+            "source": "cna@example.test",
+            "affectedData": [
+              {
+                "vendor": "Example",
+                "product": "Widget",
+                "defaultStatus": "unaffected",
+                "versions": [
+                  {
+                    "version": "2.0",
+                    "lessThan": "2.4",
+                    "versionType": "semver",
+                    "status": "affected"
+                  }
+                ]
+              }
+            ]
+          }
+        ],
+        "references": []
+      }
+    },
+    { "cve": { "id": "not-a-cve", "lastModified": "2099-01-02T00:00:00.000" } }
+  ]
+}

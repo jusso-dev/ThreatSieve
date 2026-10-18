@@ -70,13 +70,15 @@ export async function rateLimit(
   p: Principal,
   limit = 120,
   now = Date.now(),
+  /** Separate counters for routes with their own budget, such as lookup. */
+  bucket = "",
 ) {
   const minute = Math.floor(now / 60000);
   for (const [id, max] of [
     [p.tenantId, limit * 5],
     [p.tenantId + ":" + p.keyId, limit],
   ] as const) {
-    const key = id + ":" + minute;
+    const key = (bucket ? bucket + ":" : "") + id + ":" + minute;
     const row = await db
       .prepare(
         "INSERT INTO rate_limits(bucket,count,expires_at) VALUES(?,1,?) ON CONFLICT(bucket) DO UPDATE SET count=count+1 RETURNING count",
