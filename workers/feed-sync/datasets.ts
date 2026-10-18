@@ -1,4 +1,3 @@
-import { z } from "zod";
 import type { AppEnv } from "../../apps/api/src/env";
 import type { FeedBatch, FeedHealth } from "../../packages/schemas/src/index";
 import { errorType, log } from "../../packages/observability/src/index";
@@ -9,6 +8,7 @@ import {
   NvdCursor,
   importEpss,
   nvdDue,
+  nvdPageSize,
   syncNvdPage,
 } from "../../packages/intel/src/cve";
 
@@ -180,13 +180,7 @@ export async function syncNvd(
           request,
           {
             apiKey: env.NVD_API_KEY,
-            pageSize: z.coerce
-              .number()
-              .int()
-              .min(1)
-              .max(2000)
-              .catch(1000)
-              .parse(env.NVD_PAGE_SIZE ?? 1000),
+            pageSize: nvdPageSize(env.NVD_PAGE_SIZE),
             cursor,
           },
           new Date(now.getTime() + page * NVD_PAGE_GAP_MS),

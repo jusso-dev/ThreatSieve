@@ -390,6 +390,15 @@ const NvdPage = z.object({
   totalResults: z.number().int().min(0),
   vulnerabilities: z.array(z.object({ cve: z.unknown() })),
 });
+/** NVD allows 2,000; 1,000 keeps a page well inside Worker memory. */
+export const NVD_MAX_PAGE_SIZE = 1000;
+const NVD_MAX_PAGE_BYTES = 32 * 1024 * 1024;
+export function nvdPageSize(value: unknown) {
+  const size = Math.trunc(Number(value ?? NVD_MAX_PAGE_SIZE));
+  return Number.isFinite(size)
+    ? Math.min(NVD_MAX_PAGE_SIZE, Math.max(1, size))
+    : NVD_MAX_PAGE_SIZE;
+}
 export function nvdPageUrl(cursor: NvdCursor, pageSize: number) {
   const url = new URL(NVD_URL);
   url.searchParams.set("resultsPerPage", String(pageSize));
@@ -411,13 +420,7 @@ export async function syncNvdPage(
   options: { apiKey?: string; pageSize?: number; cursor: NvdCursor | null },
   now = new Date(),
 ) {
-  const pageSize = z
-    .number()
-    .int()
-    .min(1)
-    .max(2000)
-    .catch(1000)
-    .parse(options.pageSize ?? 1000);
+  const pageSize = nvdPageSize(options.pageSize);
   let cursor: NvdCursor = options.cursor ?? {
     mode: "backfill",
     startIndex: 0,
@@ -439,7 +442,8 @@ export async function syncNvdPage(
     signal: AbortSignal.timeout(90000),
   });
   if (!response.ok) throw new Error("Upstream HTTP " + response.status);
-  const text = await boundedText(response, 96 * 1024 * 1024);
+  // Bounded read: an oversized page fails instead of exhausting memory.
+  const text = await boundedText(response, NVD_MAX_PAGE_BYTES);
   const date = now.toISOString().slice(0, 10).replace(/-/g, "/");
   await env.ARCHIVE.put(
     "raw/nvd/" + date + "/" + (await digest(JSON.stringify(cursor))) + ".json",

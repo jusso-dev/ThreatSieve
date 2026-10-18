@@ -5,7 +5,10 @@ import { hubFetch, json, migratedDatabase } from "./hub-fixtures";
 import {
   DatasetReader,
   ShardWriter,
+  clearDatasetCache,
   currentVersions,
+  datasetCacheStats,
+  setDatasetCacheLimit,
 } from "../packages/intel/src/datasets";
 import {
   addressKey,
@@ -20,6 +23,7 @@ import {
   fetchOsv,
   importEpss,
   nvdDue,
+  nvdPageSize,
   nvdPageUrl,
   parseNvdCve,
   parseOsv,
@@ -96,6 +100,49 @@ describe("IPtoASN network context", () => {
     expect((await reader.floor("keys", "z"))?.[0]).toBe("j");
     expect(await reader.exact("keys", "e")).toBeNull();
     expect((await reader.exact("keys", "f"))?.[0]).toBe("f");
+  });
+  it("answers 500 addresses spread across shards within the cache byte cap", async () => {
+    clearDatasetCache();
+    const writer = new ShardWriter(bucket, "datasets/spread/v1/", "v4", 100);
+    // 20,000 /24 ranges in 200 shards.
+    for (let i = 0; i < 20000; i++) {
+      const start = (10 << 24) + i * 256;
+      const hex = (n: number) => (n >>> 0).toString(16).padStart(8, "0");
+      await writer.add([
+        hex(start),
+        hex(start + 255),
+        64512 + (i % 1000),
+        "AU",
+        "AS-" + i,
+      ]);
+    }
+    expect((await writer.finish()).shards).toBe(200);
+    const limit = 256 * 1024;
+    setDatasetCacheLimit(limit);
+    try {
+      const reader = new DatasetReader(bucket, "spread", "v1");
+      let peak = 0;
+      for (let n = 0; n < 500; n++) {
+        const i = (n * 7919) % 20000;
+        const ip = [10, (i >> 8) & 255, i & 255, 9].join(".");
+        const facts = await lookupAddress(reader, ip);
+        expect(facts?.as_org).toBe("AS-" + i);
+        peak = Math.max(peak, datasetCacheStats().bytes);
+      }
+      // One shard is about 10 KB of text; the cap holds with one in flight.
+      expect(peak).toBeLessThanOrEqual(limit + 64 * 1024);
+      expect(datasetCacheStats().entries).toBeGreaterThan(1);
+    } finally {
+      setDatasetCacheLimit(16 * 1024 * 1024);
+      clearDatasetCache();
+    }
+  }, 120000);
+  it("rejects rows that would break raw key search", async () => {
+    const writer = new ShardWriter(bucket, "datasets/bad/v1/", "keys");
+    await expect(writer.add(['a"b', 1])).rejects.toThrow(/plain text/);
+    await expect(writer.add(["ok", Number.NaN])).rejects.toThrow(
+      /invalid value/,
+    );
   });
   it("imports the dataset into R2 shards and answers IP and ASN lookups", async () => {
     const { request, calls } = hubFetch();
@@ -185,6 +232,13 @@ describe("NVD API 2.0", () => {
   const page = json("nvd-page.json") as {
     vulnerabilities: { cve: unknown }[];
   };
+  it("clamps the NVD page size to 1,000", () => {
+    expect(nvdPageSize(2000)).toBe(1000);
+    expect(nvdPageSize("250")).toBe(250);
+    expect(nvdPageSize("lots")).toBe(1000);
+    expect(nvdPageSize(0)).toBe(1);
+    expect(nvdPageSize(undefined)).toBe(1000);
+  });
   it("normalises CVSS, CWE, affected products and references", () => {
     const record = parseNvdCve(page.vulnerabilities[0]!.cve);
     expect(record).toMatchObject({
@@ -226,7 +280,7 @@ describe("NVD API 2.0", () => {
     const first = await syncNvdPage(
       env,
       request,
-      { cursor: null, pageSize: 2000 },
+      { cursor: null, pageSize: 1000 },
       now,
     );
     expect(first).toMatchObject({ stored: 2, rejected: 1, complete: true });

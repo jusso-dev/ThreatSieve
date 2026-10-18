@@ -1,22 +1,38 @@
-import { z } from "zod";
-
 /**
  * Bulk reference datasets (IP-to-ASN, EPSS) are too large to keep as D1 rows
  * and are re-imported daily. They are stored in R2 as sorted, contiguous
- * shards plus a small index of each shard's first key. D1 holds only the
- * current version, so a lookup never sees a half-written import.
+ * shards of newline-delimited JSON rows plus a small index of each shard's
+ * first key. D1 holds only the current version, so a lookup never sees a
+ * half-written import.
+ *
+ * Rows are validated once, when they are written. Readers binary-search the
+ * raw lines by key and parse only the matching line.
  */
 export type ShardRow = [string, ...(string | number | null)[]];
 export type ShardIndex = { first: string; shard: number }[];
 export const DEFAULT_ROWS_PER_SHARD = 4000;
+/** Keys are compared as raw text, so they must not need JSON escaping. */
+const SAFE_KEY = /^[\x20-\x7e]{1,200}$/;
 
 export function datasetPrefix(dataset: string, version: string) {
   return "datasets/" + dataset + "/" + version + "/";
 }
+function validRow(row: ShardRow) {
+  if (!SAFE_KEY.test(row[0]) || /["\\]/.test(row[0]))
+    throw new Error("Dataset key is not plain text");
+  for (const value of row.slice(1))
+    if (
+      value !== null &&
+      typeof value !== "string" &&
+      !(typeof value === "number" && Number.isFinite(value))
+    )
+      throw new Error("Dataset row has an invalid value");
+}
 
 /** Writes rows that arrive in strictly increasing key order. */
 export class ShardWriter {
-  private rows: ShardRow[] = [];
+  private lines: string[] = [];
+  private first: string | undefined;
   private index: ShardIndex = [];
   private last: string | undefined;
   count = 0;
@@ -27,23 +43,26 @@ export class ShardWriter {
     private rowsPerShard = DEFAULT_ROWS_PER_SHARD,
   ) {}
   async add(row: ShardRow) {
+    validRow(row);
     if (this.last !== undefined && row[0] <= this.last)
       throw new Error("Dataset rows must be strictly increasing");
     this.last = row[0];
-    this.rows.push(row);
+    this.first ??= row[0];
+    this.lines.push(JSON.stringify(row));
     this.count++;
-    if (this.rows.length >= this.rowsPerShard) await this.flush();
+    if (this.lines.length >= this.rowsPerShard) await this.flush();
   }
   private async flush() {
-    if (!this.rows.length) return;
+    if (!this.lines.length) return;
     const shard = this.index.length;
-    this.index.push({ first: this.rows[0]![0], shard });
+    this.index.push({ first: this.first!, shard });
     await this.bucket.put(
-      this.prefix + this.family + "/" + shard + ".json",
-      JSON.stringify(this.rows),
-      { httpMetadata: { contentType: "application/json" } },
+      this.prefix + this.family + "/" + shard + ".ndjson",
+      this.lines.join("\n"),
+      { httpMetadata: { contentType: "application/x-ndjson" } },
     );
-    this.rows = [];
+    this.lines = [];
+    this.first = undefined;
   }
   async finish() {
     await this.flush();
@@ -56,31 +75,61 @@ export class ShardWriter {
   }
 }
 
-const cache = new Map<string, Promise<unknown>>();
-const CACHE_LIMIT = 96;
-/** Objects are immutable per version, so an isolate-level cache is safe. */
-async function readJson(bucket: R2Bucket, key: string): Promise<unknown> {
-  let value = cache.get(key);
-  if (!value) {
-    value = bucket.get(key).then(async (object) => {
-      if (!object) return null;
-      return JSON.parse(await object.text()) as unknown;
-    });
-    value.catch(() => cache.delete(key));
-    cache.set(key, value);
-    if (cache.size > CACHE_LIMIT) cache.delete(cache.keys().next().value!);
-  }
-  return value;
+/**
+ * Isolate-level LRU of shard lines and indexes, capped by approximate memory.
+ * Objects are immutable per version, so caching across requests is safe.
+ */
+type Entry = { value: Promise<string[] | null>; bytes: number };
+const cache = new Map<string, Entry>();
+let cacheLimit = 16 * 1024 * 1024;
+let cacheBytes = 0;
+export function setDatasetCacheLimit(bytes: number) {
+  cacheLimit = bytes;
+  evict();
+}
+export function datasetCacheStats() {
+  return { bytes: cacheBytes, entries: cache.size, limit: cacheLimit };
 }
 export function clearDatasetCache() {
   cache.clear();
+  cacheBytes = 0;
 }
-const IndexSchema = z.array(
-  z.object({ first: z.string(), shard: z.number().int().min(0) }),
-);
-const RowsSchema = z.array(
-  z.tuple([z.string()]).rest(z.union([z.string(), z.number(), z.null()])),
-);
+function evict(keep?: string) {
+  for (const [key, entry] of cache) {
+    if (cacheBytes <= cacheLimit) break;
+    if (key === keep) continue;
+    cache.delete(key);
+    cacheBytes -= entry.bytes;
+  }
+}
+function readLines(bucket: R2Bucket, key: string): Promise<string[] | null> {
+  const hit = cache.get(key);
+  if (hit) {
+    // Move to the most recently used position.
+    cache.delete(key);
+    cache.set(key, hit);
+    return hit.value;
+  }
+  const entry: Entry = { value: Promise.resolve(null), bytes: 0 };
+  entry.value = bucket.get(key).then(async (object) => {
+    if (!object) return null;
+    const text = await object.text();
+    const lines = text ? text.split("\n") : [];
+    // UTF-16 text plus per-string overhead.
+    entry.bytes = text.length * 2 + lines.length * 48;
+    if (cache.get(key) === entry) {
+      cacheBytes += entry.bytes;
+      evict(key);
+    }
+    return lines;
+  });
+  entry.value.catch(() => {
+    if (cache.get(key) === entry) cache.delete(key);
+  });
+  cache.set(key, entry);
+  return entry.value;
+}
+const lineKey = (line: string) => line.slice(2, line.indexOf('"', 2));
 /** Last index position whose key is <= target, or -1. */
 function floor<T>(items: T[], key: (item: T) => string, target: string) {
   let low = 0,
@@ -101,25 +150,39 @@ export class DatasetReader {
     readonly dataset: string,
     readonly version: string,
   ) {}
+  private indexes = new Map<string, ShardIndex | null>();
+  private async index(family: string): Promise<ShardIndex | null> {
+    if (this.indexes.has(family)) return this.indexes.get(family)!;
+    const lines = await readLines(
+      this.bucket,
+      datasetPrefix(this.dataset, this.version) + "index/" + family + ".json",
+    );
+    if (!lines) {
+      this.indexes.set(family, null);
+      return null;
+    }
+    const parsed: unknown = JSON.parse(lines.join("\n"));
+    if (!Array.isArray(parsed)) throw new Error("Dataset index is invalid");
+    this.indexes.set(family, parsed as ShardIndex);
+    return parsed as ShardIndex;
+  }
   /** The row with the greatest key not above `key`, if any. */
   async floor(family: string, key: string): Promise<ShardRow | null> {
-    const prefix = datasetPrefix(this.dataset, this.version);
-    const index = await readJson(
-      this.bucket,
-      prefix + "index/" + family + ".json",
-    );
-    if (!index) return null;
-    const entries = IndexSchema.parse(index);
+    const entries = await this.index(family);
+    if (!entries) return null;
     const position = floor(entries, (e) => e.first, key);
     if (position < 0) return null;
-    const rows = await readJson(
+    const lines = await readLines(
       this.bucket,
-      prefix + family + "/" + entries[position]!.shard + ".json",
+      datasetPrefix(this.dataset, this.version) +
+        family +
+        "/" +
+        entries[position]!.shard +
+        ".ndjson",
     );
-    if (!rows) throw new Error("Dataset shard missing");
-    const parsed = RowsSchema.parse(rows) as ShardRow[];
-    const row = floor(parsed, (r) => r[0], key);
-    return row < 0 ? null : parsed[row]!;
+    if (!lines) throw new Error("Dataset shard missing");
+    const row = floor(lines, lineKey, key);
+    return row < 0 ? null : (JSON.parse(lines[row]!) as ShardRow);
   }
   async exact(family: string, key: string) {
     const row = await this.floor(family, key);
