@@ -10,6 +10,7 @@ import type {
   ObservableType,
 } from "../../schemas/src/index";
 import { parseIndicators } from "./upload";
+import { tlpAllowed, type TlpLevel } from "./taxii-sources";
 export interface OptionalFeedConfig {
   enabled: boolean;
   apiKey?: string;
@@ -20,6 +21,8 @@ export interface OptionalFeedConfig {
   pageLimit?: number;
   /** Yeti only: import observables carrying all of these tags. */
   tags?: string[];
+  /** TAXII only: import objects whose TLP marking is in this list. */
+  tlp?: TlpLevel[];
 }
 function approvedEndpoint(config: OptionalFeedConfig): URL {
   if (!config.endpoint || !config.allowedHost)
@@ -103,13 +106,18 @@ export class OptionalFeed extends PublicFeed {
       | "taxii"
       | "stix"
       | "misp-feed"
-      | "yeti",
+      | "yeti"
+      | `taxii-${string}`,
     name: string,
     repo: Repository,
     private config: OptionalFeedConfig,
     request: typeof fetch = (input, init) => fetch(input, init),
   ) {
     super(id, name, repo, {}, request);
+  }
+  /** Additional TAXII sources (`taxii-<name>`) behave like the `taxii` slot. */
+  private get kind() {
+    return this.id.startsWith("taxii-") ? "taxii" : this.id;
   }
   override async healthCheck(): Promise<FeedHealth> {
     return {
@@ -193,7 +201,7 @@ export class OptionalFeed extends PublicFeed {
       headers["x-api-key"] = this.config.apiKey;
     } else {
       url = approvedEndpoint(this.config);
-      if (this.id === "taxii") {
+      if (this.kind === "taxii") {
         headers.Accept = "application/taxii+json;version=2.1";
         if (resume?.from || (cursor && !resume))
           url.searchParams.set(
@@ -237,7 +245,7 @@ export class OptionalFeed extends PublicFeed {
         records = z
           .object({ results: z.array(z.unknown()) })
           .parse(raw).results;
-      else if (this.id === "taxii")
+      else if (this.kind === "taxii")
         records = z
           .object({
             objects: z.array(z.unknown()),
@@ -292,7 +300,7 @@ export class OptionalFeed extends PublicFeed {
         }));
       } else records = [{ raw, observable: cursor }];
     }
-    if (this.id === "taxii") {
+    if (this.kind === "taxii") {
       const page = z
         .object({
           more: z.boolean().default(false),
@@ -436,8 +444,11 @@ export class OptionalFeed extends PublicFeed {
   }
   override async normalize(input: unknown): Promise<NormalizedIntelRecord[]> {
     const provenance = providerProvenance(this.id, this.name);
-    if (this.id === "stix" || this.id === "taxii")
+    if (this.id === "stix" || this.kind === "taxii") {
+      // Objects outside the source's TLP allow-list are skipped, not imported.
+      if (this.config.tlp && !tlpAllowed(input, this.config.tlp)) return [];
       return stixRecord(input, provenance);
+    }
     const now = new Date().toISOString();
     const make = async (
       value: string,

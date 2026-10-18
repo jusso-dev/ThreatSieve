@@ -270,6 +270,8 @@ export interface FeedSecrets {
   TAXII_ALLOWED_HOST?: string;
   TAXII_API_KEY?: string;
   TAXII_PAGE_LIMIT?: string;
+  /** JSON array of additional TAXII sources; see docs/taxii-misp.md. */
+  TAXII_SOURCES?: string;
   STIX_ENABLED?: string;
   STIX_ENDPOINT?: string;
   STIX_ALLOWED_HOST?: string;

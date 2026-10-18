@@ -70,6 +70,10 @@ import { exportStix } from "../../../packages/stix/src/index";
 import { lookupObservables } from "../../../packages/enterprise/src/lookup";
 import { LOOKUP_MAX_OBSERVABLES } from "../../../packages/schemas/src/lookup";
 import {
+  ensureTaxiiSources,
+  taxiiSourceConfigs,
+} from "../../../packages/intel/src/taxii-sources";
+import {
   DATASET_SOURCES,
   LOOKUP_ONLY_SOURCES,
   runScheduledDatasets,
@@ -1035,6 +1039,7 @@ app.get("/v1/clusters/:id", scope("intel:read"), async (c) => {
   });
 });
 app.get("/v1/feeds", scope("feeds:read"), async (c) => {
+  await ensureTaxiiSources(c.env.DB, taxiiSourceConfigs(c.env));
   const rows = await c.env.DB.prepare(
     "SELECT * FROM sources WHERE id NOT IN ('customer','analyst','upload','demo') ORDER BY id",
   ).all<{ id: string; enabled: number; status: string }>();
@@ -1076,6 +1081,8 @@ app.post("/v1/feeds/:id/sync", scope("feeds:write"), async (c) => {
         ? "This dataset is imported on a schedule"
         : "This source is queried on demand by POST /v1/lookup",
     );
+  if (id.startsWith("taxii-"))
+    await ensureTaxiiSources(c.env.DB, taxiiSourceConfigs(c.env));
   let feed;
   try {
     feed = getFeed(c.env, id);
@@ -1458,10 +1465,39 @@ export default {
     ctx.waitUntil(
       (async () => {
         if (event.cron === "17 */6 * * *") {
+          const taxii = taxiiSourceConfigs(env);
+          await ensureTaxiiSources(env.DB, taxii);
           const sources = await env.DB.prepare(
-            "SELECT id FROM sources WHERE enabled=1 AND id IN ('mitre','threatfox','misp','urlhaus','feodo','cisa-kev','taxii','stix','misp-feed','otx','yeti')",
-          ).all<{ id: string }>();
+            "SELECT id,last_sync FROM sources WHERE enabled=1 AND id IN (SELECT value FROM json_each(?))",
+          )
+            .bind(
+              JSON.stringify([
+                ...[
+                  "mitre",
+                  "threatfox",
+                  "misp",
+                  "urlhaus",
+                  "feodo",
+                  "cisa-kev",
+                  "taxii",
+                  "stix",
+                  "misp-feed",
+                  "otx",
+                  "yeti",
+                ],
+                ...taxii.filter((t) => t.schedule !== "manual").map((t) => t.id),
+              ]),
+            )
+            .all<{ id: string; last_sync: string | null }>();
           for (const source of sources.results) {
+            const daily =
+              taxii.find((t) => t.id === source.id)?.schedule === "daily";
+            if (
+              daily &&
+              source.last_sync &&
+              Date.now() - Date.parse(source.last_sync) < 20 * 3600000
+            )
+              continue;
             if (
               (await getFeed(env, source.id).healthCheck()).status ===
               "disabled"

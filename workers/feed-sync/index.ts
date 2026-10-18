@@ -14,6 +14,10 @@ import { z } from "zod";
 import { normalise } from "../../packages/intel/src/normalise";
 import { RecordSchema } from "../../packages/schemas/src/index";
 import { HUB_SOURCE_NAMES, HubSource } from "./datasets";
+import {
+  taxiiObjectsUrl,
+  taxiiSourceConfigs,
+} from "../../packages/intel/src/taxii-sources";
 // A Workers VPC binding reaches a private TAXII server (OpenCTI) through its
 // outbound-only Cloudflare Tunnel. The tunnel encrypts that hop, so the private
 // origin is addressed over plain HTTP; endpoint validation still applies.
@@ -72,6 +76,29 @@ export function getFeed(env: AppEnv, id: string) {
         .map((tag) => tag.trim())
         .filter(Boolean),
     });
+  if (id.startsWith("taxii-")) {
+    const config = taxiiSourceConfigs(env).find((c) => c.id === id);
+    if (!config) throw new Error("Feed unavailable");
+    const apiKey = config.api_key_secret
+      ? (env as unknown as Record<string, string | undefined>)[
+          config.api_key_secret
+        ]
+      : undefined;
+    return new OptionalFeed(
+      config.id as `taxii-${string}`,
+      config.name,
+      new Repository(env.DB),
+      {
+        // A named token that is not provisioned keeps the source disabled.
+        enabled: !config.api_key_secret || Boolean(apiKey),
+        endpoint: taxiiObjectsUrl(config),
+        allowedHost: config.allowed_host,
+        apiKey,
+        pageLimit: config.page_limit,
+        tlp: config.tlp,
+      },
+    );
+  }
   if (HUB_SOURCE_NAMES[id])
     return new HubSource(id, HUB_SOURCE_NAMES[id], new Repository(env.DB), env);
   if (!names[id]) throw new Error("Feed unavailable");
