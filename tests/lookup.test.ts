@@ -10,7 +10,13 @@ import { importIpToAsn } from "../packages/intel/src/network";
 import { importEpss, syncNvdPage } from "../packages/intel/src/cve";
 import { clearDatasetCache } from "../packages/intel/src/datasets";
 import { LookupResponseSchema } from "../packages/schemas/src/lookup";
-import type { Evidence } from "../packages/schemas/src/index";
+import { JobSchema, type Evidence } from "../packages/schemas/src/index";
+import { processJob } from "../workers/ingest/pipeline";
+import {
+  FINAL_ATTEMPT,
+  processLookupJob,
+} from "../packages/intel/src/source-lookups";
+import type { AppEnv } from "../apps/api/src/env";
 
 let mf: Miniflare;
 let db: D1Database;
@@ -57,6 +63,38 @@ async function lookup(
     env(options.env),
     ctx,
   );
+}
+/** Runs queued lookup refresh jobs the way the enrich queue consumer does. */
+async function runLookupJobs(extra: Record<string, unknown> = {}) {
+  await Promise.allSettled(deferred.splice(0));
+  const rows = await db
+    .prepare(
+      "SELECT data FROM pipeline_jobs WHERE stage='enrich' AND status='queued' AND json_extract(data,'$.payload.mode')='source-lookup' ORDER BY created_at",
+    )
+    .all<{ data: string }>();
+  const repo = new Repository(db);
+  for (const row of rows.results) {
+    const job = JobSchema.parse(JSON.parse(row.data));
+    expect(await repo.claim(job)).toBe(true);
+    await processJob(env(extra) as unknown as AppEnv, job);
+  }
+  return rows.results.length;
+}
+/** Counts D1 statements prepared through the binding. */
+function countingDb() {
+  let statements = 0;
+  const proxy = new Proxy(db, {
+    get(target, property) {
+      if (property === "prepare")
+        return (sql: string) => {
+          statements++;
+          return target.prepare(sql);
+        };
+      const value = Reflect.get(target, property);
+      return typeof value === "function" ? value.bind(target) : value;
+    },
+  });
+  return { proxy, count: () => statements };
 }
 async function errorCode(response: Response) {
   return ((await response.json()) as { error: { code: string } }).error.code;
@@ -378,7 +416,7 @@ describe("POST /v1/lookup", () => {
     // OSV is fetched after the response and cached.
     expect(first.results[0]!.pending_sources).toEqual(["osv"]);
     expect(first.results[0]!.ttl_seconds).toBe(300);
-    await Promise.all(deferred.splice(0));
+    expect(await runLookupJobs()).toBe(1);
     clearDatasetCache();
     const body = await results(request);
     const [cve, other] = body.results;
@@ -487,7 +525,8 @@ describe("POST /v1/lookup", () => {
       ["crowdsec", "greynoise"],
       ["crowdsec"],
     ]);
-    await Promise.all(deferred.splice(0));
+    // One job per source, run by the enrich queue.
+    expect(await runLookupJobs(keyed)).toBe(2);
     const second = await results(request, { env: keyed });
     const [scanner, riot, unseen] = second.results;
     expect(scanner).toMatchObject({
@@ -533,6 +572,131 @@ describe("POST /v1/lookup", () => {
     // Without the key the source is disabled, even with a warm cache.
     const unkeyed = await results(request);
     expect(unkeyed.results[0]!.found).toBe(false);
+    // Tenant B has its own partition: A's answers, timing and pending
+    // state are invisible, and the spent GreyNoise budget is shared.
+    const otherTenant = await results(request, { key: keys.other, env: keyed });
+    expect(otherTenant.results[0]).toMatchObject({
+      found: false,
+      reputation: null,
+      sources: [],
+      pending_sources: ["crowdsec"],
+    });
+  });
+
+  it("stays within a fixed D1 statement budget when a source's daily budget is spent", async () => {
+    const keyed = {
+      GREYNOISE_API_KEY: "test-greynoise",
+      CROWDSEC_API_KEY: "test-crowdsec",
+      GREYNOISE_DAILY_LIMIT: "2",
+      CROWDSEC_DAILY_LIMIT: "60",
+    };
+    const crowdsecSpent =
+      (await db
+        .prepare(
+          "SELECT count FROM rate_limits WHERE bucket LIKE 'budget:crowdsec:%'",
+        )
+        .first<number>("count")) ?? 0;
+    const observables = Array.from({ length: 500 }, (_, i) => ({
+      type: "ipv4",
+      value: "100.64." + Math.floor(i / 250) + "." + (i % 250),
+    }));
+    const { proxy, count } = countingDb();
+    const response = await lookup(
+      { observables, include: ["reputation"] },
+      { env: { ...keyed, DB: proxy } },
+    );
+    expect(response.status).toBe(200);
+    const body = LookupResponseSchema.parse(await response.json());
+    expect(body.results).toHaveLength(500);
+    // Independent of the number of observables.
+    expect(count()).toBeLessThan(40);
+    const pending = body.results.map((r) => r.pending_sources.join(","));
+    expect(pending.filter((p) => p.includes("greynoise"))).toHaveLength(0);
+    // Ten claimed now; the rest of today's CrowdSec budget waits for later lookups.
+    expect(pending.filter((p) => p === "crowdsec")).toHaveLength(
+      60 - crowdsecSpent,
+    );
+    expect(
+      await db
+        .prepare(
+          "SELECT COUNT(*) AS n FROM source_lookup_cache WHERE source_id='crowdsec' AND lookup_key IN (SELECT value FROM json_each(?)) AND status='pending'",
+        )
+        .bind(
+          JSON.stringify(
+            await Promise.all(
+              observables
+                .slice(0, 20)
+                .map(async (o) => (await normalise(o.value, "ipv4")).id),
+            ),
+          ),
+        )
+        .first("n"),
+    ).toBe(10);
+  });
+
+  it("retries failed refreshes and refunds the budget on the final attempt", async () => {
+    await runLookupJobs({ CROWDSEC_API_KEY: "test-crowdsec" });
+    const key = (await normalise("100.64.9.9", "ipv4")).id;
+    const budget = "budget:crowdsec:" + new Date().toISOString().slice(0, 10);
+    const spent = async () =>
+      (await db
+        .prepare("SELECT count FROM rate_limits WHERE bucket=?")
+        .bind(budget)
+        .first<number>("count")) ?? 0;
+    await db
+      .prepare(
+        "INSERT INTO source_lookup_cache(source_id,scope,lookup_key,status,data,fetched_at,expires_at) VALUES('crowdsec','tenant-a',?,'pending','{}',?,?)",
+      )
+      .bind(
+        key,
+        new Date().toISOString(),
+        new Date(Date.now() + 1800000).toISOString(),
+      )
+      .run();
+    const before = await spent();
+    const failing: typeof fetch = async () =>
+      new Response("busy", { status: 503 });
+    const payload = {
+      mode: "source-lookup" as const,
+      source: "crowdsec" as const,
+      scope: "tenant-a",
+      budget,
+      items: [{ key, value: "100.64.9.9" }],
+    };
+    const lookupEnv = {
+      DB: db,
+      ARCHIVE: bucket,
+      CROWDSEC_API_KEY: "test-crowdsec",
+    };
+    await expect(
+      processLookupJob(lookupEnv, payload, 1, failing),
+    ).rejects.toThrow(/retrying/);
+    expect(
+      await db
+        .prepare(
+          "SELECT status FROM source_lookup_cache WHERE source_id='crowdsec' AND lookup_key=?",
+        )
+        .bind(key)
+        .first("status"),
+    ).toBe("pending");
+    expect(await spent()).toBe(before);
+    expect(
+      await processLookupJob(lookupEnv, payload, FINAL_ATTEMPT, failing),
+    ).toEqual({ done: 0, refunded: 1 });
+    expect(
+      await db
+        .prepare(
+          "SELECT status FROM source_lookup_cache WHERE source_id='crowdsec' AND lookup_key=?",
+        )
+        .bind(key)
+        .first("status"),
+    ).toBe("error");
+    expect(await spent()).toBe(before - 1);
+    // A finished row is skipped by a late redelivery.
+    expect(await processLookupJob(lookupEnv, payload, 1, failing)).toEqual({
+      done: 0,
+      refunded: 0,
+    });
   });
 
   it("is deterministic for the same stored data", async () => {

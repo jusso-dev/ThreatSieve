@@ -28,16 +28,16 @@ import {
   LOOKUP_SOURCES,
   cachedEvidence,
   cachedOsv,
+  claimLookups,
   lookupApplies,
   lookupConfigured,
-  perRequestLimit,
   readLookupCache,
-  refreshLookup,
-  reserveLookup,
   type CachedLookup,
   type LookupEnv,
-  type LookupTask,
+  type LookupItem,
+  type LookupSourceId,
 } from "../../intel/src/source-lookups";
+import { Repository } from "../../database/src/repository";
 import { scoreDossier } from "./scoring";
 import { sourceReliabilities } from "./sources";
 
@@ -88,7 +88,9 @@ const SCANNER_PRIORITY = ["greynoise", "crowdsec"];
 /**
  * Deterministic bulk lookup. Reads only stored intelligence, imported
  * datasets and cached source answers; never calls Workers AI. Cache misses
- * for rate-limited sources are refreshed through `defer` after responding.
+ * for rate-limited sources are claimed in bulk and refreshed by jobs on the
+ * enrich queue; `dispatch` is called when jobs were queued. The number of
+ * D1 statements is fixed, independent of the number of observables.
  */
 export async function lookupObservables(
   env: LookupEnv,
@@ -96,8 +98,9 @@ export async function lookupObservables(
   body: unknown,
   options: {
     now?: Date;
-    defer?: (work: Promise<unknown>) => void;
-    request?: typeof fetch;
+    /** Set to false to read caches without claiming refreshes. */
+    refresh?: boolean;
+    dispatch?: () => void;
   } = {},
 ): Promise<LookupResponse> {
   const now = options.now ?? new Date();
@@ -176,7 +179,7 @@ export async function lookupObservables(
     lookupConfigured(env, source) &&
     allowed(source) &&
     (source === "osv" ? include.has("cve") : include.has("reputation"));
-  const cache = await readLookupCache(env.DB, [
+  const cache = await readLookupCache(env.DB, tenant, [
     ...new Set(
       valid
         .filter((item) => LOOKUP_SOURCES.some((s) => wanted(s, item)))
@@ -186,34 +189,52 @@ export async function lookupObservables(
   const fresh = (entry: CachedLookup | undefined) =>
     entry && Date.parse(entry.expiresAt) > now.getTime() ? entry : undefined;
   const pending = new Map<string, Set<string>>();
-  const tasks: LookupTask[] = [];
-  const scheduled = new Map<string, number>();
+  const markPending = (key: string, source: string) =>
+    (pending.get(key) ?? pending.set(key, new Set()).get(key)!).add(source);
+  const misses = new Map<LookupSourceId, LookupItem[]>();
   for (const item of valid)
     for (const source of LOOKUP_SOURCES) {
       if (!wanted(source, item)) continue;
       const entry = fresh(cache.get(source + "|" + item.id));
-      if (entry?.status === "pending")
-        (
-          pending.get(item.id) ?? pending.set(item.id, new Set()).get(item.id)!
-        ).add(source);
-      if (entry || !options.defer) continue;
-      if ((scheduled.get(source) ?? 0) >= perRequestLimit(source)) continue;
-      if (!(await reserveLookup(env, source, item.id, now))) continue;
-      scheduled.set(source, (scheduled.get(source) ?? 0) + 1);
-      tasks.push({ source, key: item.id, value: item.value });
-      (
-        pending.get(item.id) ?? pending.set(item.id, new Set()).get(item.id)!
-      ).add(source);
+      if (entry?.status === "pending") markPending(item.id, source);
+      if (entry) continue;
+      (misses.get(source) ?? misses.set(source, []).get(source)!).push({
+        key: item.id,
+        value: item.value,
+      });
     }
-  if (tasks.length && options.defer)
-    options.defer(
-      (async () => {
-        for (const task of tasks)
-          await refreshLookup(env, task, options.request, now).catch(
-            () => undefined,
-          );
-      })(),
+  if (options.refresh !== false && misses.size) {
+    const { claimed, later, jobs } = await claimLookups(
+      env,
+      tenant,
+      misses,
+      now,
     );
+    // Claimed misses are being fetched; misses over this request's cap but
+    // within today's budget will be claimed by the next lookup.
+    for (const map of [claimed, later])
+      for (const [source, items] of map)
+        for (const item of items) markPending(item.key, source);
+    if (jobs.length) {
+      const repo = new Repository(env.DB);
+      const at = now.toISOString();
+      await env.DB.batch(
+        jobs.flatMap((payload) =>
+          repo.jobStatements({
+            jobId: crypto.randomUUID(),
+            tenantId: tenant,
+            entityId: payload.source,
+            stage: "enrich",
+            attempt: 0,
+            createdAt: at,
+            correlationId: crypto.randomUUID(),
+            payload: { ...payload },
+          }),
+        ),
+      );
+      options.dispatch?.();
+    }
+  }
 
   // Imported datasets and NVD records.
   const versions = await currentVersions(env.DB);
@@ -499,11 +520,12 @@ export async function lookupObservables(
             redistributable: kev.provenance.redistributable,
           });
         if (osv) {
-          const entry = fresh(cache.get("osv|" + item.id))!;
           contribute("osv", {
             first: osv.published,
             last: osv.modified,
-            retrieved: entry.fetchedAt,
+            // The OSV cache is shared by all tenants; its fetch time would
+            // reveal when another tenant looked the CVE up.
+            retrieved: null,
             url: "https://osv.dev/vulnerability/" + encodeURIComponent(osv.id),
           });
         }

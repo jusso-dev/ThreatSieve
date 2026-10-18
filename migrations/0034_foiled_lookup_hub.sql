@@ -43,13 +43,17 @@ CREATE TABLE cve_records (
 CREATE INDEX cve_records_modified ON cve_records(last_modified);
 -- Cached per-observable answers from rate-limited lookup sources. Kept out of
 -- the shared graph so a tenant's lookup never reveals the value to others.
+-- scope is the tenant for tenant-scoped sources (GreyNoise, CrowdSec) and ''
+-- for public reference sources (OSV).
 CREATE TABLE source_lookup_cache (
   source_id TEXT NOT NULL REFERENCES sources(id),
+  scope TEXT NOT NULL DEFAULT '',
   lookup_key TEXT NOT NULL,
   status TEXT NOT NULL CHECK(status IN ('pending','found','not_found','error')),
   data TEXT NOT NULL CHECK(json_valid(data)),
   fetched_at TEXT NOT NULL,
   expires_at TEXT NOT NULL,
-  PRIMARY KEY(source_id,lookup_key)
+  PRIMARY KEY(source_id,scope,lookup_key)
 );
+CREATE INDEX source_lookup_cache_lookup ON source_lookup_cache(scope,lookup_key);
 CREATE INDEX source_lookup_cache_expiry ON source_lookup_cache(expires_at);

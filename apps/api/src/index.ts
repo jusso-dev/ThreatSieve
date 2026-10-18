@@ -722,7 +722,9 @@ app.post("/v1/lookup", scope("intel:read"), async (c) => {
     );
   return c.json(
     await lookupObservables(c.env, c.get("principal"), body, {
-      defer: (work) => c.executionCtx.waitUntil(work),
+      // Refresh jobs are durable in the outbox; this only speeds delivery.
+      dispatch: () =>
+        c.executionCtx.waitUntil(dispatchOutbox(c.env).catch(() => 0)),
     }),
   );
 });
