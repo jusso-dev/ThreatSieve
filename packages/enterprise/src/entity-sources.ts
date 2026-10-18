@@ -40,7 +40,7 @@ const later = (a: string | null, b: string | null) =>
  * behind each returned relationship, sorted by source_id. `first_seen` and
  * `last_seen` are the earliest and latest dates the source gives (publication
  * for entity records, sightings for relationships). Sources the tenant
- * disabled never appear. Three D1 reads whatever the number of requests.
+ * disabled never appear. Four D1 statements whatever the number of requests.
  */
 export async function entitySourceLicences<K>(
   db: D1Database,
@@ -61,7 +61,11 @@ export async function entitySourceLicences<K>(
   const reliability = new Map(reliabilities.map((s) => [s.id, s.reliability]));
   for (const [key, request] of requests) {
     const merged = new Map<string, Facts>();
-    const add = (sourceId: string, next: Omit<Facts, "urlAt">) => {
+    const add = (
+      sourceId: string,
+      next: Omit<Facts, "urlAt">,
+      urlAt = next.retrieved,
+    ) => {
       const c = merged.get(sourceId) ?? {
         redistributable: true,
         first: null,
@@ -75,22 +79,28 @@ export async function entitySourceLicences<K>(
       c.last = later(c.last, iso(next.last));
       const retrieved = iso(next.retrieved);
       c.retrieved = later(c.retrieved, retrieved);
-      if (next.url && (retrieved ?? "") >= c.urlAt) {
+      const at = iso(urlAt) ?? "";
+      if (next.url && at >= c.urlAt) {
         c.url = next.url;
-        c.urlAt = retrieved ?? "";
+        c.urlAt = at;
       }
       merged.set(sourceId, c);
     };
     for (const id of new Set(request.entityIds))
       for (const f of facts.get(id) ?? []) {
+        // The URL competes at the retrieval time of its own record.
         const split = f.latest_url?.indexOf("\u001f") ?? -1;
-        add(f.source_id, {
-          redistributable: f.redistributable,
-          first: f.first_published,
-          last: f.last_published,
-          retrieved: f.retrieved_at,
-          url: split >= 0 ? f.latest_url!.slice(split + 1) : null,
-        });
+        add(
+          f.source_id,
+          {
+            redistributable: f.redistributable,
+            first: f.first_published,
+            last: f.last_published,
+            retrieved: f.retrieved_at,
+            url: split >= 0 ? f.latest_url!.slice(split + 1) : null,
+          },
+          split >= 0 ? f.latest_url!.slice(0, split) : null,
+        );
       }
     for (const r of request.relationships ?? []) {
       if (disabled.has(r.provenance.sourceId)) continue;

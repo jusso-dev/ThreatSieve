@@ -189,6 +189,6 @@ Results are deterministic for the same stored data and time; `as_of` is the resp
 - List entries cover the source records of the entity itself. Detail responses also cover the source of every returned relationship, and `GET /v1/entities/:id` covers all visible members of the canonical identity group. Related entities embedded in relationships are not included; fetch them by ID for their own licences.
 - `redistributable` is true only when the source's licence record allows redistribution and every contributing record was marked redistributable. `commercial_use` comes from the source's [licence record](intelligence-sources.md#licence-records).
 - `first_seen` and `last_seen` are the earliest and latest dates the source gives: publication dates for entity records and first/last sightings for relationships, `null` when it gives none. `retrieved_at` is the newest retrieval and `source_url` comes from the newest record that has one.
-- Sources excluded by the tenant's source policy never appear, and their relationships are already left out.
+- Sources excluded by the tenant's source policy never appear, and their relationships are already left out. Tenant-private `upload` and `customer` records are not listed.
 
-Licence data is read in a fixed number of D1 statements per response, aggregated per entity and source, so the size does not grow with the number of records a source delivered.
+Licence data is read in a fixed number of D1 statements per response and aggregated per entity and source in SQL, so the response size does not grow with the number of records a source delivered.

@@ -178,7 +178,9 @@ export interface EntitySourceFacts {
 /**
  * Per entity and source, one aggregated row over its entity_sources records,
  * so the answer stays bounded by the number of sources however many records a
- * source delivered. Sources the tenant disabled are left out.
+ * source delivered. Sources the tenant disabled are left out, and so are
+ * tenant-private upload and customer records: a row does not say which tenant
+ * submitted it, and its times would reveal another tenant's submission.
  */
 export async function entitySourceFacts(
   db: D1Database,
@@ -191,11 +193,12 @@ export async function entitySourceFacts(
     .prepare(
       `SELECT entity_id,source_id,
          MIN(COALESCE(json_extract(provenance,'$.redistributable'),0)) AS redistributable,
-         MIN(json_extract(provenance,'$.publishedAt')) AS first_published,
-         MAX(json_extract(provenance,'$.publishedAt')) AS last_published,
+         MIN(NULLIF(json_extract(provenance,'$.publishedAt'),'')) AS first_published,
+         MAX(NULLIF(json_extract(provenance,'$.publishedAt'),'')) AS last_published,
          MAX(json_extract(provenance,'$.retrievedAt')) AS retrieved_at,
          MAX(json_extract(provenance,'$.retrievedAt')||char(31)||json_extract(provenance,'$.sourceUrl')) AS latest_url
        FROM entity_sources WHERE entity_id IN (SELECT value FROM json_each(?1))
+       AND source_id NOT IN ('upload','customer')
        AND NOT EXISTS(SELECT 1 FROM tenant_source_policy p WHERE p.tenant_id=?2 AND p.source_id=entity_sources.source_id AND p.enabled=0)
        GROUP BY entity_id,source_id ORDER BY entity_id,source_id`,
     )

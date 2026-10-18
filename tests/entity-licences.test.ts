@@ -124,6 +124,37 @@ beforeAll(async () => {
     data: {},
     provenance: provenance("mitre"),
   });
+  // An older MITRE technique record with a URL; the newest record has none.
+  await repo.putEntity({
+    id: "attack-pattern--licence",
+    type: "attack-technique",
+    name: "Licence Technique",
+    description: "",
+    aliases: [],
+    externalId: "T9998",
+    data: {},
+    provenance: provenance("mitre", {
+      sourceRecordId: "t-old",
+      retrievedAt: "2099-01-01T00:00:00.000Z",
+      sourceUrl: "https://attack.example.test/t-old",
+    }),
+  });
+  // A MITRE relationship retrieved between the two: its URL is the newest.
+  await repo.putRelationship({
+    id: "rel-licence-mitre",
+    sourceEntityId: "campaign--licence",
+    targetEntityId: "attack-pattern--licence",
+    relationshipType: "USES",
+    assertionType: "source_claimed",
+    confidence: 0.5,
+    sourceIds: ["mitre"],
+    provenance: provenance("mitre", {
+      retrievedAt: "2099-01-02T00:00:00.000Z",
+      sourceUrl: "https://attack.example.test/rel",
+    }),
+    createdAt: at,
+    updatedAt: at,
+  });
   // A ThreatFox relationship to the actor: its source counts on detail views.
   await repo.putRelationship({
     id: "rel-licence-uses",
@@ -223,6 +254,16 @@ describe("per-source licences on entity APIs", () => {
       "mitre",
     ]);
     expect(entity.source_assertions).toEqual(entity.sources);
+  });
+
+  it("takes source_url from the newest record that has one", async () => {
+    const technique = await get(
+      "/v1/attack/techniques/attack-pattern--licence",
+    );
+    expect(byId(technique.source_licences).get("mitre")).toMatchObject({
+      retrieved_at: at,
+      source_url: "https://attack.example.test/rel",
+    });
   });
 
   it("applies the tenant source policy", async () => {
