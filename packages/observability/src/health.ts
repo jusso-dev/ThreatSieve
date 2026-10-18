@@ -12,6 +12,12 @@ const required = new Set([
   "feodo",
   "cisa-kev",
 ]);
+/** Lookup sources sync only when asked; daily datasets need a longer window. */
+const onDemand = new Set(["greynoise", "crowdsec", "osv"]);
+const staleAfter: Record<string, number> = {
+  iptoasn: 36 * 3600000,
+  epss: 36 * 3600000,
+};
 type JobRow = OperationalReport["jobs"][number];
 /** A stage with pending work and no completion or claim this recently is stalled. */
 export const PIPELINE_STALL_MS = 15 * 60000;
@@ -133,19 +139,23 @@ export function operationalAlerts(
         f.id,
         "Source processing has failed jobs. Inspect the source before replaying.",
       );
-    else if (!f.last_sync)
+    else if (onDemand.has(f.id)) {
+      /* Lookup caches have no sync cadence to go stale against. */
+    } else if (!f.last_sync)
       add(
         "FEED_INITIAL_SYNC",
         "warning",
         f.id,
         "The first complete source sync has not been recorded.",
       );
-    else if (age(f.last_sync) > 12 * 3600000)
+    else if (age(f.last_sync) > (staleAfter[f.id] ?? 12 * 3600000))
       add(
         "FEED_STALE",
         "critical",
         f.id,
-        "Source has not completed a sync in 12 hours.",
+        staleAfter[f.id]
+          ? "Dataset has not completed an import in 36 hours."
+          : "Source has not completed a sync in 12 hours.",
       );
     if (f.status === "degraded")
       add(

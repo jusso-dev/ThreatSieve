@@ -254,6 +254,17 @@ export interface FeedSecrets {
   OTX_API_KEY?: string;
   VIRUSTOTAL_API_KEY?: string;
   GREYNOISE_API_KEY?: string;
+  /** Lookups per UTC day; the community tier allows 50 per week. Default 7. */
+  GREYNOISE_DAILY_LIMIT?: string;
+  CROWDSEC_API_KEY?: string;
+  /** Lookups per UTC day; the free CTI key allows 1,500 per month. Default 45. */
+  CROWDSEC_DAILY_LIMIT?: string;
+  /** Optional; raises the NVD API 2.0 rate limit from 5 to 50 requests per 30 seconds. */
+  NVD_API_KEY?: string;
+  NVD_PAGE_SIZE?: string;
+  OSV_DAILY_LIMIT?: string;
+  /** Requests per minute per API key for POST /v1/lookup. Default 60. */
+  LOOKUP_RATE_LIMIT?: string;
   TAXII_ENABLED?: string;
   TAXII_ENDPOINT?: string;
   TAXII_ALLOWED_HOST?: string;

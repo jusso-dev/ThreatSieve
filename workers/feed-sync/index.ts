@@ -13,6 +13,7 @@ import { makeJob } from "../ingest/pipeline";
 import { z } from "zod";
 import { normalise } from "../../packages/intel/src/normalise";
 import { RecordSchema } from "../../packages/schemas/src/index";
+import { HUB_SOURCE_NAMES, HubSource } from "./datasets";
 // A Workers VPC binding reaches a private TAXII server (OpenCTI) through its
 // outbound-only Cloudflare Tunnel. The tunnel encrypts that hop, so the private
 // origin is addressed over plain HTTP; endpoint validation still applies.
@@ -71,6 +72,8 @@ export function getFeed(env: AppEnv, id: string) {
         .map((tag) => tag.trim())
         .filter(Boolean),
     });
+  if (HUB_SOURCE_NAMES[id])
+    return new HubSource(id, HUB_SOURCE_NAMES[id], new Repository(env.DB), env);
   if (!names[id]) throw new Error("Feed unavailable");
   const Provider = ["mitre", "threatfox"].includes(id)
     ? PublicFeed

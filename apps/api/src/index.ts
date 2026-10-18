@@ -67,6 +67,11 @@ import {
 import { parseIndicators } from "../../../workers/ingest/upload";
 import { submitBulk } from "../../../workers/ingest/submission";
 import { exportStix } from "../../../packages/stix/src/index";
+import {
+  DATASET_SOURCES,
+  LOOKUP_ONLY_SOURCES,
+  runScheduledDatasets,
+} from "../../../workers/feed-sync/datasets";
 
 type Context = {
   Bindings: AppEnv;
@@ -1016,6 +1021,17 @@ app.get("/v1/feeds/:id/health", scope("feeds:read"), async (c) => {
 });
 app.post("/v1/feeds/:id/sync", scope("feeds:write"), async (c) => {
   const id = c.req.param("id")!;
+  if (
+    (DATASET_SOURCES as readonly string[]).includes(id) ||
+    (LOOKUP_ONLY_SOURCES as readonly string[]).includes(id)
+  )
+    throw new AppError(
+      "FEED_NOT_SYNCABLE",
+      409,
+      (DATASET_SOURCES as readonly string[]).includes(id)
+        ? "This dataset is imported on a schedule"
+        : "This source is queried on demand by POST /v1/lookup",
+    );
   let feed;
   try {
     feed = getFeed(c.env, id);
@@ -1424,5 +1440,8 @@ export default {
         await recordMaintenanceHeartbeat(env);
       })(),
     );
+    // Reference datasets for /v1/lookup run separately so a slow import
+    // never delays pipeline maintenance.
+    ctx.waitUntil(runScheduledDatasets(env, event.cron));
   },
 } satisfies ExportedHandler<AppEnv, unknown>;
