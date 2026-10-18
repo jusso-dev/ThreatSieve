@@ -67,6 +67,8 @@ import {
 import { parseIndicators } from "../../../workers/ingest/upload";
 import { submitBulk } from "../../../workers/ingest/submission";
 import { exportStix } from "../../../packages/stix/src/index";
+import { lookupObservables } from "../../../packages/enterprise/src/lookup";
+import { LOOKUP_MAX_OBSERVABLES } from "../../../packages/schemas/src/lookup";
 import {
   DATASET_SOURCES,
   LOOKUP_ONLY_SOURCES,
@@ -117,6 +119,12 @@ app.onError((error, c) => {
         },
       },
       400,
+    );
+  if (error instanceof AppError && error.status === 429)
+    // Rate-limit windows are calendar minutes.
+    c.header(
+      "Retry-After",
+      String(Math.max(1, 60 - Math.floor((Date.now() / 1000) % 60))),
     );
   if (error instanceof AppError)
     return c.json(
@@ -299,7 +307,23 @@ app.use("/v1/*", async (c, next) => {
       ? await authenticate(c.env.DB, c.req.raw)
       : await authenticateSession(c.env, c.req.raw);
   c.set("principal", p);
-  await rateLimit(c.env.DB, p);
+  // Lookups have their own bucket so bulk lookup traffic cannot starve
+  // assessments, and the reverse.
+  if (c.req.path === "/v1/lookup")
+    await rateLimit(
+      c.env.DB,
+      p,
+      z.coerce
+        .number()
+        .int()
+        .min(1)
+        .max(10000)
+        .catch(60)
+        .parse(c.env.LOOKUP_RATE_LIMIT ?? 60),
+      Date.now(),
+      "lookup",
+    );
+  else await rateLimit(c.env.DB, p);
   if (
     p.kind === "session" &&
     !["GET", "HEAD", "OPTIONS"].includes(c.req.method) &&
@@ -683,6 +707,24 @@ app.get("/v1/assessments/:id/stix", scope("assessment:read"), async (c) => {
     "Content-Type": "application/stix+json",
     "Content-Disposition": `attachment; filename="${a.assessment_id}.stix.json"`,
   });
+});
+app.post("/v1/lookup", scope("intel:read"), async (c) => {
+  const body = await json(c, 4 * 1024 * 1024);
+  const observables =
+    body && typeof body === "object" && "observables" in body
+      ? (body as { observables: unknown }).observables
+      : undefined;
+  if (Array.isArray(observables) && observables.length > LOOKUP_MAX_OBSERVABLES)
+    throw new AppError(
+      "TOO_MANY_OBSERVABLES",
+      413,
+      "A lookup accepts at most " + LOOKUP_MAX_OBSERVABLES + " observables",
+    );
+  return c.json(
+    await lookupObservables(c.env, c.get("principal"), body, {
+      defer: (work) => c.executionCtx.waitUntil(work),
+    }),
+  );
 });
 app.get("/v1/observables/:id", scope("intel:read"), async (c) => {
   const repo = new Repository(c.env.DB);
