@@ -58,6 +58,7 @@ Sync MITRE first, then MISP, then indicator feeds so canonical knowledge is avai
 - Asynchronous processing, D1 outbox, job leases, retry/dead-letter handling and replay.
 - STIX 2.1 export and a Python OpenCTI connector using `OpenCTIConnectorHelper.send_stix2_bundle`.
 - Optional provider adapters for OTX, VirusTotal, GreyNoise, TAXII, STIX, MISP and [Yeti](docs/intelligence-sources.md#yeti); disabled unless explicitly configured.
+- [Bulk lookup](docs/api.md#bulk-lookup) for integrations such as [Foiled](docs/foiled.md): reputation, scanner classification, IP-to-ASN network context (IPtoASN), CVE context (NVD, FIRST EPSS, CISA KEV, OSV) and per-fact licence provenance, without model calls.
 - Offline evaluation metrics and browser/integration/security tests.
 
 [Analyst workflows and boundaries](docs/intelligence-operations.md) · [Automation](docs/automation.md) · [TAXII and MISP](docs/taxii-misp.md) · [Enterprise architecture](docs/enterprise-upgrade.md)
@@ -186,6 +187,6 @@ Captured from the running application with the labelled synthetic demo dataset. 
 
 ## Documentation
 
-[TIP UX review and design decisions](docs/tip-ux-review.md) · [All 244 reference entries](docs/research/catalogue.md) · [Accounts and teams](docs/authentication.md) · [Architecture](docs/architecture.md) · [Threat model](docs/threat-model.md) · [Classification](docs/classification.md) · [Confidence](docs/confidence-model.md) · [Sources](docs/intelligence-sources.md) · [Data model](docs/data-model.md) · [API](docs/api.md) · [OpenCTI](docs/opencti.md) · [Deployment](docs/deployment.md) · [Commercial architecture](docs/commercial-architecture.md)
+[TIP UX review and design decisions](docs/tip-ux-review.md) · [All 244 reference entries](docs/research/catalogue.md) · [Accounts and teams](docs/authentication.md) · [Architecture](docs/architecture.md) · [Threat model](docs/threat-model.md) · [Classification](docs/classification.md) · [Confidence](docs/confidence-model.md) · [Sources](docs/intelligence-sources.md) · [Data model](docs/data-model.md) · [API](docs/api.md) · [Foiled lookups](docs/foiled.md) · [OpenCTI](docs/opencti.md) · [Deployment](docs/deployment.md) · [Commercial architecture](docs/commercial-architecture.md)
 
 ![Queued STIX collection package with download manifest](docs/images/collection-export.png)

@@ -32,6 +32,8 @@ Optional feed adapters are wired into the existing source-sync, R2 archive, norm
 
 Endpoints require HTTPS, exact approved hostnames and no redirects. They are deployment configuration, never taken from threat-report text. These adapters import shared threat intelligence; do not configure tenant-private telemetry as a global feed. Enable the corresponding source's scheduler flag after reviewing its terms, or use Sync now. Credentials are not returned to the frontend.
 
+To import a Foiled honeypot collection, including how TLP and redistribution are handled, see [Foiled](foiled.md#importing-foiled-intelligence-into-threatsieve).
+
 TAXII next tokens and original `added_after` survive checkpoints. A page is committed only after its processing jobs finish; further pages enqueue another sync. Missing/repeating continuation tokens fail instead of silently losing records. OTX pagination follows numeric page tokens only on its pinned endpoint.
 
 ## MISP event exchange
