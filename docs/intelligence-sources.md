@@ -56,7 +56,7 @@ The instance must be reachable over HTTPS on an approved DNS name. Private IP ad
 
 ## Licence records
 
-Each source row in D1 records `license`, `redistributable` and `commercial_use` (migration `0034`). `commercial_use` is 1 when the provider's terms permit commercial use, 0 when commercial use needs a separate agreement, and `NULL` when unknown or operator-defined. [`POST /v1/lookup`](api.md#bulk-lookup) returns these with every fact. They were set from the providers' published terms in October 2026. Review them before commercial distribution; they do not replace legal review.
+Each source row in D1 records `license`, `redistributable` and `commercial_use` (migration `0034`). `commercial_use` is 1 when the provider's terms permit commercial use, 0 when commercial use needs a separate agreement, and `NULL` when unknown or operator-defined. [`POST /v1/lookup`](api.md#bulk-lookup) returns these with every fact, and the entity and catalogue APIs return them in [`source_licences`](api.md#source-licences-on-entity-apis). They were set from the providers' published terms in October 2026. Review them before commercial distribution; they do not replace legal review.
 
 | Source | Redistributable | Commercial use | Basis |
 | --- | --- | --- | --- |

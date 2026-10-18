@@ -22,7 +22,7 @@ erDiagram
 
 Global entities store a validated typed JSON representation alongside indexed type, canonical name and external ID. Observables add a unique `(type, normalized_value)` key and deterministic SHA-256 identity. Normalisation precedes hashing. DNS names are lowercased and IDNA-normalised; hashes are lowercased; IPv6 is canonicalised; URL host/default ports are normalised without sorting query parameters or lowercasing paths. Ambiguous observables need explicit type.
 
-Relationships retain assertion type, source/target, confidence and provenance. Source claims and model inferences are never rewritten into observed facts. Tenant analyst relationship feedback is stored separately from the shared public graph. `entity_sources` retains provenance when another feed supplies aliases for an existing entity.
+Relationships retain assertion type, source/target, confidence and provenance. Source claims and model inferences are never rewritten into observed facts. Tenant analyst relationship feedback is stored separately from the shared public graph. `entity_sources` retains provenance when another feed supplies aliases for an existing entity. Entity APIs aggregate it per source, with the licence columns of `sources`, into `source_licences`.
 
 Private submissions and customer observations have visibility grants in `tenant_observables`. They do not enter public search or graph results. Public feed intelligence can promote the same deterministic observable into global visibility without disclosing tenant observations. Assessment, feedback, session, export and job queries require tenant scope.
 

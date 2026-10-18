@@ -7,7 +7,7 @@
 | Route | Use |
 | --- | --- |
 | [`POST /v1/lookup`](api.md#bulk-lookup) | Reputation, scanner classification, network context, CVE context and relationships for up to 500 observables per call |
-| `GET /v1/actors`, `GET /v1/campaigns`, `GET /v1/attack/techniques`, `GET /v1/entities/:id` | Actor, campaign and ATT&CK catalogue with aliases, external IDs, references and per-source licences |
+| `GET /v1/actors`, `GET /v1/campaigns`, `GET /v1/attack/techniques`, `GET /v1/entities/:id` | Actor, campaign and ATT&CK catalogue with aliases, external IDs, references and per-source licences in [`source_licences`](api.md#source-licences-on-entity-apis) |
 
 All of these need only `intel:read`. Lookups never call Workers AI, never create assessments, and read only stored intelligence, imported datasets and cached source answers.
 
@@ -69,7 +69,7 @@ Grant `intel:read` and nothing else. The key's tenant decides what Foiled sees: 
 
 ## Licences and redistribution
 
-Every result lists the sources behind its facts with `license`, `redistributable` and `commercial_use` (`null` when unknown). Foiled treats `redistributable: false` or `commercial_use: false` as never-resell and never-export: such facts are shown only to the tenant that looked them up and are not republished over Foiled's TAXII server. Where NVD contributes, the product must state "This product uses the NVD API but is not endorsed or certified by the NVD." See [licence records](intelligence-sources.md#licence-records).
+Every lookup result lists the sources behind its facts with `license`, `redistributable` and `commercial_use` (`null` when unknown). Catalogue and entity responses carry the same objects in `source_licences`, so Foiled reads licence flags per source from ThreatSieve instead of keeping its own copy of the licence table. Foiled treats `redistributable: false` or `commercial_use: false` as never-resell and never-export: such facts are shown only to the tenant that looked them up and are not republished over Foiled's TAXII server. Where NVD contributes, the product must state "This product uses the NVD API but is not endorsed or certified by the NVD." See [licence records](intelligence-sources.md#licence-records).
 
 Relationship `assertion` keeps ThreatSieve's values: `observed`, `source_claimed`, `analyst_confirmed`, `model_inferred`. None of them is attribution. Weight `model_inferred` lowest.
 

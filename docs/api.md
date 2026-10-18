@@ -181,3 +181,14 @@ Tenant source policy applies to every section: a source a tenant has excluded co
 A lookup uses a fixed number of D1 statements, independent of the number of observables: daily budgets are read in one query, cache misses are claimed in one statement per source, and refreshes are queued as one enrich-queue job per source. Queued refreshes retry with backoff; a refresh that still fails on its last attempt is cached as an error for 15 minutes and its budget unit is refunded. `redistributable` is true only when the source record allows redistribution and every contributing record was marked redistributable.
 
 Results are deterministic for the same stored data and time; `as_of` is the response time. The recency part of `score` and `confidence` depends on the current time.
+
+## Source licences on entity APIs
+
+`GET /v1/actors`, `/v1/malware`, `/v1/campaigns` and `/v1/attack/techniques` add `source_licences` to every listed entity. Their `/:id` routes and `GET /v1/entities/:id` add it at the top level of the response. Each entry has the same fields as a [bulk lookup](#bulk-lookup) `sources` entry: `source_id`, `name`, `license`, `redistributable`, `commercial_use` (`null` when unknown), tenant-adjusted `reliability`, `first_seen`, `last_seen`, `retrieved_at` and `source_url`. Entries are sorted by `source_id`. Existing fields are unchanged; on `GET /v1/entities/:id`, `sources` and `source_assertions` keep returning the raw provenance records.
+
+- List entries cover the source records of the entity itself. Detail responses also cover the source of every returned relationship, and `GET /v1/entities/:id` covers all visible members of the canonical identity group. Related entities embedded in relationships are not included; fetch them by ID for their own licences.
+- `redistributable` is true only when the source's licence record allows redistribution and every contributing record was marked redistributable. `commercial_use` comes from the source's [licence record](intelligence-sources.md#licence-records).
+- `first_seen` and `last_seen` are the earliest and latest dates the source gives: publication dates for entity records and first/last sightings for relationships, `null` when it gives none. `retrieved_at` is the newest retrieval and `source_url` comes from the newest record that has one.
+- Sources excluded by the tenant's source policy never appear, and their relationships are already left out.
+
+Licence data is read in a fixed number of D1 statements per response, aggregated per entity and source, so the size does not grow with the number of records a source delivered.
