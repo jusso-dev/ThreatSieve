@@ -68,6 +68,7 @@ import { parseIndicators } from "../../../workers/ingest/upload";
 import { submitBulk } from "../../../workers/ingest/submission";
 import { exportStix } from "../../../packages/stix/src/index";
 import { lookupObservables } from "../../../packages/enterprise/src/lookup";
+import { entitySourceLicences } from "../../../packages/enterprise/src/entity-sources";
 import { LOOKUP_MAX_OBSERVABLES } from "../../../packages/schemas/src/lookup";
 import {
   ensureTaxiiSources,
@@ -769,8 +770,16 @@ for (const [route, type] of [
     const data = rows.results
       .slice(0, limit)
       .map((r) => JSON.parse(r.data) as { id: string });
+    const licences = await entitySourceLicences(
+      c.env.DB,
+      c.get("principal").tenantId,
+      new Map(data.map((e) => [e.id, { entityIds: [e.id] }])),
+    );
     return c.json({
-      data,
+      data: data.map((e) => ({
+        ...e,
+        source_licences: licences.get(e.id) ?? [],
+      })),
       next_cursor: rows.results.length > limit ? data.at(-1)!.id : null,
     });
   });
@@ -786,13 +795,17 @@ for (const [route, type] of [
       !(await repo.visible(c.get("principal").tenantId, resolved.id))
     )
       throw new AppError("NOT_FOUND", 404, "Entity not found");
+    const tenant = c.get("principal").tenantId;
+    const relationships = await repo.edges(resolved.id, 80, tenant);
+    const licences = await entitySourceLicences(
+      c.env.DB,
+      tenant,
+      new Map([[resolved.id, { entityIds: [resolved.id], relationships }]]),
+    );
     return c.json({
       entity: resolved,
-      relationships: await repo.edges(
-        resolved.id,
-        80,
-        c.get("principal").tenantId,
-      ),
+      relationships,
+      source_licences: licences.get(resolved.id) ?? [],
     });
   });
 }
@@ -908,6 +921,13 @@ app.get("/v1/entities/:id", scope("intel:read"), async (c) => {
     if (await repo.visible(tenant, other))
       relationships.push({ ...edge, entity: await repo.entity(other) });
   }
+  const licences = await entitySourceLicences(
+    c.env.DB,
+    tenant,
+    new Map([
+      [view.canonical_id, { entityIds: view.member_ids, relationships }],
+    ]),
+  );
   const includeHistory = c.req.query("history") === "1";
   let assessments:
     | Awaited<ReturnType<typeof latestAssessmentPerObservable>>["data"]
@@ -927,6 +947,7 @@ app.get("/v1/entities/:id", scope("intel:read"), async (c) => {
     alias_ids: view.alias_ids,
     sources: view.source_assertions,
     source_assertions: view.source_assertions,
+    source_licences: licences.get(view.canonical_id) ?? [],
     source_count: view.source_count,
     mirror_count: view.mirror_count,
     independent_corroboration_count: view.independent_corroboration_count,
@@ -1485,7 +1506,9 @@ export default {
                   "otx",
                   "yeti",
                 ],
-                ...taxii.filter((t) => t.schedule !== "manual").map((t) => t.id),
+                ...taxii
+                  .filter((t) => t.schedule !== "manual")
+                  .map((t) => t.id),
               ]),
             )
             .all<{ id: string; last_sync: string | null }>();

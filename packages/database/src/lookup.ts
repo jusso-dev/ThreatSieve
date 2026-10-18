@@ -143,3 +143,73 @@ export async function sourceLicences(db: D1Database, tenantId: string) {
     ),
   };
 }
+
+/**
+ * Licence part of a lookup or entity `sources[]` entry. `redistributable` is
+ * false when the source licence forbids it or any contributing record was
+ * marked non-redistributable; `commercial_use` is null when unknown.
+ */
+export function licenceFields(
+  id: string,
+  row: SourceLicence | undefined,
+  recordsRedistributable: boolean,
+) {
+  return {
+    source_id: id,
+    name: row?.name ?? id,
+    license: row?.license ?? null,
+    redistributable: row?.redistributable === 1 && recordsRedistributable,
+    commercial_use:
+      row?.commercial_use === null || row?.commercial_use === undefined
+        ? null
+        : row.commercial_use === 1,
+  };
+}
+
+export interface EntitySourceFacts {
+  source_id: string;
+  redistributable: boolean;
+  first_published: string | null;
+  last_published: string | null;
+  retrieved_at: string | null;
+  /** `<retrievedAt>\u001f<sourceUrl>` of the newest record with a URL. */
+  latest_url: string | null;
+}
+/**
+ * Per entity and source, one aggregated row over its entity_sources records,
+ * so the answer stays bounded by the number of sources however many records a
+ * source delivered. Sources the tenant disabled are left out.
+ */
+export async function entitySourceFacts(
+  db: D1Database,
+  tenantId: string,
+  entityIds: string[],
+): Promise<Map<string, EntitySourceFacts[]>> {
+  const result = new Map<string, EntitySourceFacts[]>();
+  if (!entityIds.length) return result;
+  const rows = await db
+    .prepare(
+      `SELECT entity_id,source_id,
+         MIN(COALESCE(json_extract(provenance,'$.redistributable'),0)) AS redistributable,
+         MIN(json_extract(provenance,'$.publishedAt')) AS first_published,
+         MAX(json_extract(provenance,'$.publishedAt')) AS last_published,
+         MAX(json_extract(provenance,'$.retrievedAt')) AS retrieved_at,
+         MAX(json_extract(provenance,'$.retrievedAt')||char(31)||json_extract(provenance,'$.sourceUrl')) AS latest_url
+       FROM entity_sources WHERE entity_id IN (SELECT value FROM json_each(?1))
+       AND NOT EXISTS(SELECT 1 FROM tenant_source_policy p WHERE p.tenant_id=?2 AND p.source_id=entity_sources.source_id AND p.enabled=0)
+       GROUP BY entity_id,source_id ORDER BY entity_id,source_id`,
+    )
+    .bind(ids(entityIds), tenantId)
+    .all<
+      Omit<EntitySourceFacts, "redistributable"> & {
+        entity_id: string;
+        redistributable: number;
+      }
+    >();
+  for (const { entity_id, ...row } of rows.results) {
+    const list = result.get(entity_id) ?? [];
+    list.push({ ...row, redistributable: row.redistributable === 1 });
+    result.set(entity_id, list);
+  }
+  return result;
+}

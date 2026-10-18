@@ -15,10 +15,10 @@ import {
 import {
   entitiesById,
   evidenceFor,
+  licenceFields,
   relationshipsFor,
   sourceLicences,
   visibleEntities,
-  type SourceLicence,
 } from "../../database/src/lookup";
 import { entityId, normalise } from "../../intel/src/normalise";
 import { DatasetReader, currentVersions } from "../../intel/src/datasets";
@@ -575,16 +575,8 @@ export async function lookupObservables(
     const sourceList: LookupSource[] = [...contributions.entries()]
       .sort(([a], [b]) => a.localeCompare(b))
       .map(([id, c]) => {
-        const row: SourceLicence | undefined = sources.get(id);
         return {
-          source_id: id,
-          name: row?.name ?? id,
-          license: row?.license ?? null,
-          redistributable: row?.redistributable === 1 && c.redistributable,
-          commercial_use:
-            row?.commercial_use === null || row?.commercial_use === undefined
-              ? null
-              : row.commercial_use === 1,
+          ...licenceFields(id, sources.get(id), c.redistributable),
           reliability: reliability.get(id) ?? 0.5,
           first_seen: c.first.sort()[0] ?? null,
           last_seen: c.last.sort().at(-1) ?? null,
