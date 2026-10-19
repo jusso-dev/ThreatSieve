@@ -345,7 +345,12 @@ it("operational job summary seeks live work instead of scanning job history", as
     .filter((d) => d.includes("pipeline_jobs"));
   expect(staleDetails.length).toBeGreaterThan(0);
   expect(
-    staleDetails.filter((d) => !d.includes("jobs_unfinished_result")),
+    staleDetails.filter(
+      (d) =>
+        !/^SEARCH pipeline_jobs USING (COVERING )?INDEX jobs_unfinished_result /.test(
+          d,
+        ),
+    ),
   ).toEqual([]);
 });
 
