@@ -29,37 +29,63 @@ const OUTBOX_STALL_MS = 10 * 60000;
  *
  * pipeline_jobs is append-only, so the old single-predicate form
  * `(tenant_id=? OR tenant_id IS NULL) AND (status!='complete' OR updated_at>=?)`
- * could not seek on `jobs_operational_scope` and read every global job ever
- * created. Each compound term here is an equality or range seek on
- * (tenant_id,status,updated_at), so the rows read track live work rather than
- * table history. D1 allows at most five compound terms, hence two statements.
+ * could not seek and read every global job ever created. Each compound term
+ * here is an equality or range seek on `jobs_operational_summary`
+ * (tenant_id,status,updated_at,stage,created_at), which also covers every
+ * selected column: a row lookup walks the overflow pages of the job's data
+ * JSON, and a day of feed-sync jobs made that slower than the probe timeout.
+ * D1 allows at most five compound terms, hence two statements.
  */
 const jobsSql = (scope: string, since: string) =>
-  "SELECT stage,status,COUNT(*) AS count,MIN(created_at) AS oldest,MAX(updated_at) AS latest,SUM(CASE WHEN result IS NOT NULL AND status!='complete' THEN 1 ELSE 0 END) AS stale_result_count FROM (" +
+  "SELECT stage,status,COUNT(*) AS count,MIN(created_at) AS oldest,MAX(updated_at) AS latest FROM (" +
   [
     ...["queued", "running", "failed"].map(
       (status) =>
-        `SELECT stage,status,created_at,updated_at,result FROM pipeline_jobs WHERE ${scope} AND status='${status}'`,
+        `SELECT stage,status,created_at,updated_at FROM pipeline_jobs WHERE ${scope} AND status='${status}'`,
     ),
-    `SELECT stage,status,created_at,updated_at,result FROM pipeline_jobs WHERE ${scope} AND status='complete' AND updated_at>=${since}`,
+    `SELECT stage,status,created_at,updated_at FROM pipeline_jobs WHERE ${scope} AND status='complete' AND updated_at>=${since}`,
   ].join(" UNION ALL ") +
   ") GROUP BY stage,status";
 /** Binds (tenant, since). */
 export const TENANT_JOBS_SQL = jobsSql("tenant_id=?1", "?2");
 /** Binds (since). */
 export const GLOBAL_JOBS_SQL = jobsSql("tenant_id IS NULL", "?1");
+/**
+ * Unfinished jobs holding a committed result, read from the partial index
+ * `jobs_unfinished_result` so the summary never touches job rows. Binds (tenant).
+ */
+export const STALE_RESULTS_SQL =
+  "SELECT stage,status,COUNT(*) AS count FROM (" +
+  ["tenant_id=?1", "tenant_id IS NULL"]
+    .map(
+      (scope) =>
+        `SELECT stage,status FROM pipeline_jobs WHERE ${scope} AND result IS NOT NULL AND status!='complete'`,
+    )
+    .join(" UNION ALL ") +
+  ") GROUP BY stage,status";
 export async function operationalJobs(
   db: D1Database,
   tenant: string,
   since: string,
 ): Promise<JobRow[]> {
-  const [own, global] = await Promise.all([
-    db.prepare(TENANT_JOBS_SQL).bind(tenant, since).all<JobRow>(),
-    db.prepare(GLOBAL_JOBS_SQL).bind(since).all<JobRow>(),
+  const [own, global, stale] = await Promise.all([
+    db
+      .prepare(TENANT_JOBS_SQL)
+      .bind(tenant, since)
+      .all<Omit<JobRow, "stale_result_count">>(),
+    db
+      .prepare(GLOBAL_JOBS_SQL)
+      .bind(since)
+      .all<Omit<JobRow, "stale_result_count">>(),
+    db
+      .prepare(STALE_RESULTS_SQL)
+      .bind(tenant)
+      .all<{ stage: string; status: string; count: number }>(),
   ]);
   const merged = new Map<string, JobRow>();
-  for (const row of [...own.results, ...global.results]) {
-    const key = row.stage + "\u0000" + row.status,
+  for (const summary of [...own.results, ...global.results]) {
+    const row = { ...summary, stale_result_count: 0 },
+      key = row.stage + "\u0000" + row.status,
       prev = merged.get(key);
     merged.set(
       key,
@@ -79,11 +105,13 @@ export async function operationalJobs(
                   ? prev.latest
                   : row.latest
                 : (prev.latest ?? row.latest),
-            stale_result_count:
-              prev.stale_result_count + row.stale_result_count,
           }
-        : { ...row },
+        : row,
     );
+  }
+  for (const row of stale.results) {
+    const group = merged.get(row.stage + "\u0000" + row.status);
+    if (group) group.stale_result_count += row.count;
   }
   return [...merged.values()].sort(
     (a, b) =>

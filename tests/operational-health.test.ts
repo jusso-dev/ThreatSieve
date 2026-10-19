@@ -4,6 +4,7 @@ import { readdirSync, readFileSync } from "node:fs";
 import { migrationStatements } from "../packages/database/src/migrations";
 import {
   GLOBAL_JOBS_SQL,
+  STALE_RESULTS_SQL,
   TENANT_JOBS_SQL,
   operationalJobs,
   operationalAlerts,
@@ -326,7 +327,31 @@ it("operational job summary seeks live work instead of scanning job history", as
     expect(details.filter((d) => /\((tenant_id|status)=\?\)$/.test(d))).toEqual(
       [],
     );
+    // Row lookups walk each job's data JSON; a day of feed-sync jobs made that
+    // slower than the probe timeout, so the summary must stay index-only.
+    expect(
+      details.filter(
+        (d) =>
+          d.startsWith("SEARCH pipeline_jobs") && !/COVERING INDEX/.test(d),
+      ),
+    ).toEqual([]);
   }
+  const stalePlan = await db
+    .prepare("EXPLAIN QUERY PLAN " + STALE_RESULTS_SQL)
+    .bind(tenant)
+    .all<{ detail: string }>();
+  const staleDetails = stalePlan.results
+    .map((r) => r.detail)
+    .filter((d) => d.includes("pipeline_jobs"));
+  expect(staleDetails.length).toBeGreaterThan(0);
+  expect(
+    staleDetails.filter(
+      (d) =>
+        !/^SEARCH pipeline_jobs USING (COVERING )?INDEX jobs_unfinished_result /.test(
+          d,
+        ),
+    ),
+  ).toEqual([]);
 });
 
 const job = (
