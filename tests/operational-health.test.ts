@@ -4,6 +4,8 @@ import { readdirSync, readFileSync } from "node:fs";
 import { migrationStatements } from "../packages/database/src/migrations";
 import {
   GLOBAL_JOBS_SQL,
+  OUTBOX_DISPATCHED_SQL,
+  OUTBOX_PENDING_SQL,
   STALE_RESULTS_SQL,
   TENANT_JOBS_SQL,
   operationalJobs,
@@ -570,4 +572,25 @@ it("another tenant's recent outbox dispatch does not mask a tenant's publication
   expect(report.alerts).toContainEqual(
     expect.objectContaining({ code: "OUTBOX_LAG", severity: "critical" }),
   );
+});
+it("outbox health reads seek the outbox before joining jobs", async () => {
+  // Regression: driving from pipeline_jobs read every global job to probe the
+  // outbox, 2.9M rows per /v1/ops/status call in production.
+  for (const [sql, args] of [
+    [OUTBOX_PENDING_SQL, ["ops-a"]],
+    [OUTBOX_DISPATCHED_SQL, [new Date(now).toISOString(), "ops-a"]],
+  ] as const) {
+    const plan = await db
+      .prepare("EXPLAIN QUERY PLAN " + sql)
+      .bind(...args)
+      .all<{ detail: string }>();
+    expect(plan.results.map((r) => r.detail)).toEqual([
+      expect.stringMatching(
+        /^SEARCH o USING .*INDEX outbox_\w+ \(dispatched_at[=>]/,
+      ),
+      expect.stringMatching(
+        /^SEARCH p USING .*INDEX sqlite_autoindex_pipeline_jobs_1 \(id=\?\)/,
+      ),
+    ]);
+  }
 });
