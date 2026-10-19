@@ -299,6 +299,18 @@ export function operationalAlerts(
   }
   return alerts;
 }
+/**
+ * Outbox SQL drives from the outbox's dispatched_at index. With a plain JOIN
+ * the planner chose to walk every global job via jobs_tenant and probe the
+ * outbox per job (2.9M rows and 5 seconds in production); CROSS JOIN pins
+ * the outbox as the outer table.
+ */
+/** Binds (tenant). */
+export const OUTBOX_PENDING_SQL =
+  "SELECT COUNT(*) AS pending,MIN(o.created_at) AS oldest FROM outbox o CROSS JOIN pipeline_jobs p ON p.id=o.id WHERE o.dispatched_at IS NULL AND (p.tenant_id=? OR p.tenant_id IS NULL)";
+/** Binds (since, tenant). */
+export const OUTBOX_DISPATCHED_SQL =
+  "SELECT MAX(o.dispatched_at) AS last_dispatch FROM outbox o CROSS JOIN pipeline_jobs p ON p.id=o.id WHERE o.dispatched_at>=? AND (p.tenant_id=? OR p.tenant_id IS NULL)";
 export async function operationalReport(
   env: AppEnv,
   tenant: string,
@@ -324,14 +336,10 @@ export async function operationalReport(
       "SELECT id,name,status,enabled,last_sync,next_sync,records_processed,records_added,records_updated,errors FROM sources WHERE id NOT IN ('customer','analyst','upload','demo') ORDER BY id",
     ).all<Omit<OperationalReport["feeds"][number], "configured">>(),
     operationalJobs(env.DB, tenant, since),
-    env.DB.prepare(
-      "SELECT COUNT(*) AS pending,MIN(o.created_at) AS oldest FROM outbox o JOIN pipeline_jobs p ON p.id=o.id WHERE o.dispatched_at IS NULL AND (p.tenant_id=? OR p.tenant_id IS NULL)",
-    )
+    env.DB.prepare(OUTBOX_PENDING_SQL)
       .bind(tenant)
       .first<{ pending: number; oldest: string | null }>(),
-    env.DB.prepare(
-      "SELECT MAX(o.dispatched_at) AS last_dispatch FROM outbox o JOIN pipeline_jobs p ON p.id=o.id WHERE o.dispatched_at>=? AND (p.tenant_id=? OR p.tenant_id IS NULL)",
-    )
+    env.DB.prepare(OUTBOX_DISPATCHED_SQL)
       .bind(new Date(now.getTime() - OUTBOX_STALL_MS).toISOString(), tenant)
       .first<{ last_dispatch: string | null }>(),
     env.DB.prepare(
