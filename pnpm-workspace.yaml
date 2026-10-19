@@ -7,6 +7,8 @@ overrides:
   "sharp@<0.35.5": "0.35.5"
   # GHSA-5j98-mcp5-4vw2: patch the OpenNext build tool's glob CLI.
   "glob@>=10.2.0 <10.5.0": "10.5.0"
+  # GHSA-4cwx-7wf7-3272, GHSA-rfgv-xxqx-mfg5, GHSA-w293-vg96-wgc3: Miniflare 4 pins undici 7.28.
+  "undici@>=7.0.0 <7.29.1": "7.29.1"
 onlyBuiltDependencies:
   - esbuild
   - sharp
