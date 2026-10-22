@@ -105,6 +105,8 @@
                   },
                   {
                     "type": "array",
+                    "minItems": 1,
+                    "maxItems": 500,
                     "items": {
                       "type": "object"
                     }
@@ -121,6 +123,8 @@
                   },
                   {
                     "type": "array",
+                    "minItems": 1,
+                    "maxItems": 500,
                     "items": {
                       "type": "object"
                     }
@@ -137,6 +141,8 @@
                   },
                   {
                     "type": "array",
+                    "minItems": 1,
+                    "maxItems": 500,
                     "items": {
                       "type": "object"
                     }
@@ -153,6 +159,8 @@
                   },
                   {
                     "type": "array",
+                    "minItems": 1,
+                    "maxItems": 500,
                     "items": {
                       "type": "object"
                     }

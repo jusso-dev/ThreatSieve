@@ -2,7 +2,8 @@ import { z } from "zod";
 import { normalizeValue } from "../../../intel/src/normalise";
 import { tlpOf } from "../../../intel/src/taxii-sources";
 import { refang } from "../normalise";
-import type { IndicatorType, TlpInput } from "../schema";
+import { AppError } from "../../../observability/src/index";
+import { INGEST_MAX_ITEMS, type IndicatorType, type TlpInput } from "../schema";
 import {
   clip,
   documentIssues,
@@ -122,7 +123,48 @@ export function mapStix(document: unknown): Mapped[] {
           label === "white" ? "clear" : (label as TlpInput),
         );
   }
-  const relationships = objects.filter((o) => o.type === "relationship");
+  // Fail before mapping so a bundle cannot spend CPU on items it will reject.
+  if (
+    objects.filter((o) => ITEM_TYPES[String(o.type)]).length > INGEST_MAX_ITEMS
+  )
+    throw new AppError(
+      "TOO_MANY_ITEMS",
+      413,
+      "A request accepts at most " + INGEST_MAX_ITEMS + " items",
+    );
+  // Relationship endpoints indexed once instead of scanned per object.
+  const neighbours = new Map<string, string[]>();
+  for (const r of objects)
+    if (r.type === "relationship")
+      for (const [from, to] of [
+        [r.source_ref, r.target_ref],
+        [r.target_ref, r.source_ref],
+      ]) {
+        const list = neighbours.get(String(from)) ?? [];
+        list.push(String(to));
+        neighbours.set(String(from), list);
+      }
+  // Each referenced indicator's pattern is read and checked at most once.
+  const patterns = new Map<
+    string,
+    {
+      found: { type: IndicatorType; value: string; valid: boolean }[];
+      warnings: string[];
+    }
+  >();
+  const indicatorsOf = (source: Record<string, unknown>) => {
+    const key = String(source.id);
+    let entry = patterns.get(key);
+    if (!entry) {
+      const warnings: string[] = [];
+      const found = patternIndicators(String(source.pattern), warnings).map(
+        (f) => ({ ...f, valid: validIndicator(f.type, f.value) }),
+      );
+      entry = { found, warnings };
+      patterns.set(key, entry);
+    }
+    return entry;
+  };
   const mitreId = (o: Record<string, unknown> | undefined) =>
     records(o?.external_references).find(
       (r) =>
@@ -162,17 +204,19 @@ export function mapStix(document: unknown): Mapped[] {
         tlp = local;
     }
     const creator = byId.get(String(object.created_by_ref ?? ""));
-    const related = relationships
-      .filter((r) => r.source_ref === o.id || r.target_ref === o.id)
-      .map((r) =>
-        byId.get(String(r.source_ref === o.id ? r.target_ref : r.source_ref)),
-      );
-    const refs = Array.isArray(object.object_refs)
-      ? object.object_refs.map((id) => byId.get(String(id)))
-      : [];
-    if (object.type === "sighting")
-      refs.push(byId.get(String(object.sighting_of_ref)));
-    const linked = [...new Set([...related, ...refs])].filter(isRecord);
+    const linkedIds = new Set([
+      ...(neighbours.get(o.id) ?? []),
+      ...(Array.isArray(object.object_refs)
+        ? object.object_refs.map(String)
+        : []),
+      ...(object.type === "sighting" ? [String(object.sighting_of_ref)] : []),
+    ]);
+    if (linkedIds.size > 1000)
+      warnings.push("Only the first 1000 related objects were read");
+    const linked = [...linkedIds]
+      .slice(0, 1000)
+      .map((id) => byId.get(id))
+      .filter(isRecord);
 
     const indicators: {
       type: IndicatorType;
@@ -195,17 +239,18 @@ export function mapStix(document: unknown): Mapped[] {
         );
         continue;
       }
-      const found = patternIndicators(source.pattern, warnings);
+      const { found, warnings: notes } = indicatorsOf(source);
+      warnings.push(...notes);
       if (!found.length)
         warnings.push(
           "No supported comparisons in pattern of " + String(source.id),
         );
       const confidence =
         typeof source.confidence === "number" ? source.confidence : undefined;
-      for (const f of found) {
+      for (const { valid, ...f } of found) {
         // A report or sighting is not rejected for a bad value in an indicator
         // it references; that indicator is reported on its own.
-        if (source !== object && !validIndicator(f.type, f.value)) {
+        if (source !== object && !valid) {
           warnings.push(
             "Invalid " + f.type + " from " + String(source.id) + " skipped",
           );

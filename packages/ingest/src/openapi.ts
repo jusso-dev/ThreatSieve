@@ -147,11 +147,27 @@ export function ingestOpenApi() {
     },
     csaf: {
       description: "A CSAF 2.0 document, or an array of them.",
-      oneOf: [{ type: "object" }, { type: "array", items: { type: "object" } }],
+      oneOf: [
+        { type: "object" },
+        {
+          type: "array",
+          minItems: 1,
+          maxItems: INGEST_MAX_ITEMS,
+          items: { type: "object" },
+        },
+      ],
     },
     osv: {
       description: "An OSV record, or an array of them.",
-      oneOf: [{ type: "object" }, { type: "array", items: { type: "object" } }],
+      oneOf: [
+        { type: "object" },
+        {
+          type: "array",
+          minItems: 1,
+          maxItems: INGEST_MAX_ITEMS,
+          items: { type: "object" },
+        },
+      ],
     },
   };
   const content: Record<string, { schema: unknown }> = {};

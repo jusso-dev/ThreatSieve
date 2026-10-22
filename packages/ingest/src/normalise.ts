@@ -228,26 +228,6 @@ export async function normaliseItem(
       path: ["external_id"],
       message: "External ID contains control characters",
     });
-  let externalIdSource: NormalisedItem["external_id_source"] = "provided";
-  if (!externalId) {
-    // Without a producer ID the content identifies the item, so an edited
-    // title or date creates a new record rather than updating one.
-    externalId =
-      "sha256:" +
-      (await digest(
-        JSON.stringify([
-          v.type,
-          title,
-          v.published_at ?? null,
-          v.cve_ids ?? [],
-        ]),
-      ));
-    externalIdSource = "derived";
-    warnings.push(
-      "No external_id; derived one from type, title, published_at and cve_ids",
-    );
-  }
-
   const dates = {
     published_at: null as string | null,
     updated_at: null as string | null,
@@ -265,6 +245,22 @@ export async function normaliseItem(
     change(["cve_ids", i], cve, upper);
     if (!cveIds.includes(upper)) cveIds.push(upper);
   });
+
+  let externalIdSource: NormalisedItem["external_id_source"] = "provided";
+  if (!externalId) {
+    // Without a producer ID the content identifies the item, so an edited
+    // title or date creates a new record rather than updating one. Hashing
+    // normalised values keeps equivalent resubmissions on the same record.
+    externalId =
+      "sha256:" +
+      (await digest(
+        JSON.stringify([v.type, title, dates.published_at, [...cveIds].sort()]),
+      ));
+    externalIdSource = "derived";
+    warnings.push(
+      "No external_id; derived one from type, title, published_at and cve_ids",
+    );
+  }
 
   let cvss: NormalisedItem["cvss"] = null;
   if (v.cvss) {

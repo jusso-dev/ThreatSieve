@@ -6,6 +6,11 @@ import { app } from "../apps/api/src/index";
 import { digest } from "../packages/intel/src/normalise";
 import { consume } from "../workers/ingest/pipeline";
 import { ingestOpenApi } from "../packages/ingest/src/openapi";
+import { prepareItems, storeItems } from "../packages/ingest/src/service";
+import {
+  mapDocuments,
+  readIngestRequest,
+} from "../packages/ingest/src/formats/index";
 import type { AppEnv } from "../apps/api/src/env";
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any -- assertions inspect arbitrary JSON
@@ -406,6 +411,47 @@ describe("single items", () => {
     expect(row?.raw).toBeNull();
     expect(row?.raw_key).toMatch(/^ingest\/raw\/tenant-a\//);
     expect((await get("/v1/ingest/" + created.json.id)).json.raw).toEqual(big);
+    // An applied update replaces the R2 copy rather than orphaning it.
+    const next = { blob: "z".repeat(300 * 1024) };
+    const updated = await post(alert({ external_id: "big-raw", raw: next }));
+    expect(updated.json.status).toBe("updated");
+    expect(await env.ARCHIVE.get(row!.raw_key)).toBeNull();
+    expect((await get("/v1/ingest/" + created.json.id)).json.raw).toEqual(next);
+  });
+
+  it("reports a retried write by the same ingest as created, not unchanged", async () => {
+    const request = readIngestRequest("application/json", [
+      alert({ external_id: "retry-1" }),
+    ]);
+    const { accepted } = await prepareItems(
+      "tenant-a",
+      request,
+      mapDocuments(request),
+    );
+    const first = await storeItems(
+      env,
+      "tenant-a",
+      "user",
+      "inb_retry",
+      accepted,
+    );
+    const retry = await storeItems(
+      env,
+      "tenant-a",
+      "user",
+      "inb_retry",
+      accepted,
+    );
+    expect(first.map((o) => o.outcome)).toEqual(["created"]);
+    expect(retry.map((o) => o.outcome)).toEqual(["created"]);
+    const other = await storeItems(
+      env,
+      "tenant-a",
+      "user",
+      "inb_other",
+      accepted,
+    );
+    expect(other.map((o) => o.outcome)).toEqual(["unchanged"]);
   });
 });
 

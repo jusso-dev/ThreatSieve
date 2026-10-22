@@ -1,5 +1,6 @@
 import { z } from "zod";
 import type { TlpInput } from "../schema";
+import { parseCvssVector } from "../severity";
 import {
   clip,
   documentIssues,
@@ -183,20 +184,26 @@ export function mapCsaf(document: unknown): Mapped[] {
       .map((c) => d.notes?.find((n) => n.category === c)?.text)
       .find((t) => t?.trim()) ?? vulnerabilities[0]?.notes?.[0]?.text;
 
+  // One bad score block is skipped with a warning, as for OSV, rather than
+  // rejecting the whole advisory.
   let best: { version: string; score: number; vector: string } | undefined;
   for (const v of vulnerabilities)
     for (const s of v.scores ?? [])
-      for (const c of [s.cvss_v3, s.cvss_v2])
-        if (c && (!best || c.baseScore > best.score))
-          best = {
-            version: c.version,
-            score: c.baseScore,
-            vector: c.vectorString,
-          };
-  if (best && !["2.0", "3.0", "3.1"].includes(best.version)) {
-    warnings.push("Unsupported CVSS version " + best.version + " ignored");
-    best = undefined;
-  }
+      for (const c of [s.cvss_v3, s.cvss_v2]) {
+        if (!c || (best && c.baseScore <= best.score)) continue;
+        const checked = ["2.0", "3.0", "3.1"].includes(c.version)
+          ? parseCvssVector(c.version, c.vectorString.trim())
+          : { ok: false as const, message: "unsupported version " + c.version };
+        if (!checked.ok) {
+          warnings.push("CVSS score ignored: " + checked.message);
+          continue;
+        }
+        best = {
+          version: c.version,
+          score: c.baseScore,
+          vector: c.vectorString.trim(),
+        };
+      }
 
   const index = productIndex(parsed.data.product_tree);
   const products = new Map<

@@ -183,6 +183,24 @@ describe("STIX 2.1 mapper", () => {
     expect(warnings).toEqual(["Unsupported hash algorithm SHA-512 skipped"]);
   });
 
+  it("refuses a bundle with more mappable objects than a request allows, before mapping", () => {
+    const objects = Array.from({ length: 501 }, (_, i) => ({
+      type: "indicator",
+      id: "indicator--00000000-0000-4000-8000-" + String(i).padStart(12, "0"),
+      created: "2026-01-01T00:00:00Z",
+      modified: "2026-01-01T00:00:00Z",
+      pattern_type: "stix",
+      pattern: "[ipv4-addr:value = '192.0.2.1']",
+    }));
+    expect(() =>
+      mapStix({
+        type: "bundle",
+        id: "bundle--00000000-0000-4000-8000-000000000002",
+        objects,
+      }),
+    ).toThrow(/at most 500 items/);
+  });
+
   it("rejects a document that is not a STIX bundle", () => {
     const [result] = mapStix({ type: "indicator", id: "indicator--x" });
     expect(result!.issues?.[0]?.path).toEqual(["type"]);
@@ -269,6 +287,17 @@ describe("CSAF 2.0 mapper", () => {
     expect(item.affected_products.map((p) => p.product)).toContain(
       "Cisco IOS XE Software",
     );
+  });
+
+  it("skips an invalid CVSS block with a warning instead of rejecting the advisory", async () => {
+    const doc = fixture("csaf-bsi-2022-0001.json") as {
+      vulnerabilities: { scores: { cvss_v3: { vectorString: string } }[] }[];
+    };
+    doc.vulnerabilities[0]!.scores[0]!.cvss_v3.vectorString = "CVSS:3.0/AV:L";
+    const { items, failures } = await run(mapCsaf(doc), "csaf");
+    expect(failures).toEqual([]);
+    expect(items[0]!.cvss).toBeNull();
+    expect(items[0]!.warnings.join()).toContain("CVSS score ignored");
   });
 
   it("reports document-level problems with their path", () => {
@@ -543,6 +572,29 @@ describe("normalisation", () => {
     if (!a.ok || !b.ok) throw new Error("expected ok");
     expect(a.item.external_id_source).toBe("derived");
     expect(a.item.external_id).toBe(b.item.external_id);
+    // Equivalent dates and CVE lists derive the same ID.
+    const c = await normaliseItem(
+      {
+        type: "alert",
+        title: "Same",
+        source: { name: "S" },
+        published_at: "2024-01-01T00:00:00Z",
+        cve_ids: ["cve-2024-0002", "CVE-2024-0001"],
+      },
+      { format: "native" },
+    );
+    const d = await normaliseItem(
+      {
+        type: "alert",
+        title: "Same",
+        source: { name: "S" },
+        published_at: "2024-01-01T00:00:00.000+00:00",
+        cve_ids: ["CVE-2024-0001", "CVE-2024-0002", "CVE-2024-0001"],
+      },
+      { format: "native" },
+    );
+    if (!c.ok || !d.ok) throw new Error("expected ok");
+    expect(c.item.external_id).toBe(d.item.external_id);
   });
 
   it("restricts sources for source-scoped keys", async () => {

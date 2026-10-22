@@ -170,24 +170,44 @@ export async function storeItems(
         ),
       );
     }
+    // Raw copies these rows point at now, so an applied update can remove its
+    // predecessor instead of orphaning it in R2.
+    const before = await env.DB.prepare(
+      "SELECT id,raw_key FROM ingest_items WHERE tenant_id=? AND id IN (SELECT value FROM json_each(?)) AND raw_key IS NOT NULL",
+    )
+      .bind(tenantId, JSON.stringify(chunk.map((p) => p.id)))
+      .all<{ id: string; raw_key: string }>();
+    const previousKeys = new Map(before.results.map((r) => [r.id, r.raw_key]));
     const results = await env.DB.batch<{ revision: number }>(statements);
     for (const [i, p] of chunk.entries()) {
-      const revision = results[i]?.results[0]?.revision;
+      let revision = results[i]?.results[0]?.revision;
+      if (revision !== undefined) {
+        const previous = previousKeys.get(p.id);
+        if (previous && previous !== rawKeys[i])
+          await env.ARCHIVE.delete(previous);
+      } else {
+        const stored = await env.DB.prepare(
+          "SELECT raw_key,revision,last_ingest_id FROM ingest_items WHERE tenant_id=? AND id=?",
+        )
+          .bind(tenantId, p.id)
+          .first<{
+            raw_key: string | null;
+            revision: number;
+            last_ingest_id: string;
+          }>();
+        // A retried batch finds rows its own earlier attempt wrote; report
+        // what that attempt did rather than "unchanged".
+        if (stored?.last_ingest_id === ingestId) revision = stored.revision;
+        // An unapplied update must not leave its copy of the original behind.
+        if (rawKeys[i] && stored?.raw_key !== rawKeys[i])
+          await env.ARCHIVE.delete(rawKeys[i]!);
+      }
       const outcome: Outcome =
         revision === undefined
           ? "unchanged"
           : revision === 1
             ? "created"
             : "updated";
-      // An unapplied update must not leave its copy of the original behind.
-      if (outcome === "unchanged" && rawKeys[i]) {
-        const stored = await env.DB.prepare(
-          "SELECT raw_key FROM ingest_items WHERE tenant_id=? AND id=?",
-        )
-          .bind(tenantId, p.id)
-          .first<string | null>("raw_key");
-        if (stored !== rawKeys[i]) await env.ARCHIVE.delete(rawKeys[i]!);
-      }
       outcomes.push({
         index: p.index,
         id: p.id,
