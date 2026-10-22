@@ -9,6 +9,8 @@ import {
 } from "../../../workers/ingest/reliability";
 import { scheduleOperations } from "../../../packages/enterprise/src/automation";
 import { enterpriseRoutes } from "./enterprise";
+import { ingestRoutes } from "./ingest";
+import { ingestOpenApi } from "../../../packages/ingest/src/openapi";
 import {
   createAuth,
   authenticateSession,
@@ -105,7 +107,7 @@ app.use("*", async (c, next) =>
     origin: c.env.WEB_ORIGIN,
     credentials: true,
     allowHeaders: ["Content-Type", "Authorization", "Idempotency-Key"],
-    exposeHeaders: ["X-Request-Id"],
+    exposeHeaders: ["X-Request-Id", "Retry-After", "Idempotent-Replayed"],
     allowMethods: ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
   })(c, next),
 );
@@ -166,6 +168,11 @@ app.get("/ready", async (c) => {
   } catch {
     return c.json({ status: "not-ready" }, 503);
   }
+});
+// Public contract for the ingest API; it contains no tenant data.
+app.get("/openapi/ingest.json", (c) => {
+  c.header("Cache-Control", "public, max-age=300");
+  return c.json(ingestOpenApi());
 });
 app.on(["GET", "POST"], "/auth/*", async (c) => {
   let emailFailed = false;
@@ -327,6 +334,22 @@ app.use("/v1/*", async (c, next) => {
         .parse(c.env.LOOKUP_RATE_LIMIT ?? 60),
       Date.now(),
       "lookup",
+    );
+  // Ingest has its own bucket so integrations pushing alerts cannot starve
+  // analysts, and the reverse.
+  else if (c.req.path === "/v1/ingest" && c.req.method === "POST")
+    await rateLimit(
+      c.env.DB,
+      p,
+      z.coerce
+        .number()
+        .int()
+        .min(1)
+        .max(10000)
+        .catch(60)
+        .parse(c.env.INGEST_RATE_LIMIT ?? 60),
+      Date.now(),
+      "ingest",
     );
   else await rateLimit(c.env.DB, p);
   if (
@@ -1298,6 +1321,12 @@ app.post("/v1/api-keys", scope("admin"), async (c) => {
       name: z.string().min(1).max(100),
       scopes: z.array(Scopes).min(1),
       expiresAt: z.iso.datetime().optional(),
+      // Restricts POST /v1/ingest to items from these source names.
+      ingestSources: z
+        .array(z.string().trim().min(1).max(200))
+        .min(1)
+        .max(50)
+        .optional(),
     })
     .parse(await json(c));
   const key = await createApiKey(
@@ -1306,6 +1335,7 @@ app.post("/v1/api-keys", scope("admin"), async (c) => {
     input.name,
     input.scopes,
     input.expiresAt,
+    input.ingestSources,
   );
   await new Repository(c.env.DB).audit(
     c.get("principal"),
@@ -1462,6 +1492,7 @@ app.get("/v1/ops", scope("admin"), async (c) => {
     .all();
   return c.json({ jobs: jobs.results, usage: usage.results });
 });
+app.route("/v1", ingestRoutes);
 app.route("/v1", enterpriseRoutes);
 app.notFound((c) =>
   c.json(
