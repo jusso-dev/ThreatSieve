@@ -2,24 +2,24 @@
 
 All provider imports require provenance. Raw feed data is archived in R2 before normalisation. Checkpoints move only once downstream processing finishes. Failures remain visible in source operations and pipeline jobs.
 
-| Provider | Interface | Notes |
-| --- | --- | --- |
-| MITRE ATT&CK | Official `mitre-attack/attack-stix-data` enterprise STIX 2.1 | IDs, aliases, external refs, descriptions and relationships retained; revoked/deprecated objects excluded |
-| MISP Galaxy | Official `MISP/misp-galaxy` collections | threat-actor, mitre-intrusion-set, mitre-malware, ransomware, tool, mitre-campaign; explicit MITRE references and unambiguous aliases resolve canonical entities |
-| ThreatFox | `get_iocs` Community API | Auth-Key required; seven-day window; IP:port split without treating the port as part of IP identity |
-| URLhaus | Authenticated recent URL API | Recent additions are bounded by upstream limits; payload hashes retained when supplied; no maliciousness automatically propagates to the host |
-| Feodo Tracker | Official JSON C2 list | Source-provided malware, port and first/last observation preserved |
-| CISA KEV | Official JSON catalogue | CVE, vendor, product, due date, ransomware field and notes retained |
-| [IPtoASN](#iptoasn) | Daily whole-file import | IP range to ASN, AS name and country for [lookup](api.md#bulk-lookup); no per-request calls |
-| [FIRST EPSS](#first-epss) | Daily CSV import | Exploit prediction score and percentile per CVE |
-| [NVD](#nvd) | API 2.0, incremental by `lastModified` | CVE description, CVSS, CWE, affected products and references |
-| [OSV](#osv) | Per-CVE lookup, cached | Advisory identifiers and affected packages |
-| [GreyNoise](#greynoise-and-crowdsec) | Community API lookup, cached | Internet scanner and business-service classification (IPv4) |
-| [CrowdSec CTI](#greynoise-and-crowdsec) | Smoke API lookup, cached | Behaviours, reputation and benign-service classification (IPv4, IPv6) |
+| Provider                                | Interface                                                    | Notes                                                                                                                                                            |
+| --------------------------------------- | ------------------------------------------------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| MITRE ATT&CK                            | Official `mitre-attack/attack-stix-data` enterprise STIX 2.1 | IDs, aliases, external refs, descriptions and relationships retained; revoked/deprecated objects excluded                                                        |
+| MISP Galaxy                             | Official `MISP/misp-galaxy` collections                      | threat-actor, mitre-intrusion-set, mitre-malware, ransomware, tool, mitre-campaign; explicit MITRE references and unambiguous aliases resolve canonical entities |
+| ThreatFox                               | `get_iocs` Community API                                     | Auth-Key required; seven-day window; IP:port split without treating the port as part of IP identity                                                              |
+| URLhaus                                 | Authenticated recent URL API                                 | Recent additions are bounded by upstream limits; payload hashes retained when supplied; no maliciousness automatically propagates to the host                    |
+| Feodo Tracker                           | Official JSON C2 list                                        | Source-provided malware, port and first/last observation preserved                                                                                               |
+| CISA KEV                                | Official JSON catalogue                                      | CVE, vendor, product, due date, ransomware field and notes retained                                                                                              |
+| [IPtoASN](#iptoasn)                     | Daily whole-file import                                      | IP range to ASN, AS name and country for [lookup](api.md#bulk-lookup); no per-request calls                                                                      |
+| [FIRST EPSS](#first-epss)               | Daily CSV import                                             | Exploit prediction score and percentile per CVE                                                                                                                  |
+| [NVD](#nvd)                             | API 2.0, incremental by `lastModified`                       | CVE description, CVSS, CWE, affected products and references                                                                                                     |
+| [OSV](#osv)                             | Per-CVE lookup, cached                                       | Advisory identifiers and affected packages                                                                                                                       |
+| [GreyNoise](#greynoise-and-crowdsec)    | Community API lookup, cached                                 | Internet scanner and business-service classification (IPv4)                                                                                                      |
+| [CrowdSec CTI](#greynoise-and-crowdsec) | Smoke API lookup, cached                                     | Behaviours, reputation and benign-service classification (IPv4, IPv6)                                                                                            |
 
 MISP source aliases are not independently verified identities. Ambiguous aliases do not cause automatic entity merging. An explicit MITRE external reference is preferred. Sync MITRE before MISP and indicator feeds.
 
-ThreatFox and URLhaus credentials are Worker secrets (`THREATFOX_AUTH_KEY`, `URLHAUS_AUTH_KEY`). Feeds can require commercial agreements. Redistribution is denied by default except explicitly permitted sources; review the provider's current terms before commercial distribution. Source-level redistribution settings are conservative and do not replace a legal review of derivative intelligence.
+ThreatFox and URLhaus credentials are Worker secrets (`THREATFOX_AUTH_KEY`, `URLHAUS_AUTH_KEY`). Feeds can require commercial agreements. ThreatSieve is a non-commercial open-source project, so every feed is redistributable: feed records flow into TAXII collections, STIX exports, collection packages and OpenCTI. Only tenant-private sources (`customer`, `analyst`, `upload`) are withheld. A [TAXII source](taxii-misp.md#additional-taxii-sources) can still opt out with `"redistributable": false`. Provider terms still apply to anyone running a deployment; see [licence records](#licence-records).
 
 Optional adapters in `packages/intel/src/optional-feeds.ts` implement OTX subscribed pulses, VirusTotal observable lookup, GreyNoise Community and CrowdSec CTI lookups, TAXII object envelopes, generic STIX, MISP attributes and [Yeti](#yeti) observables. They are disabled unless configured explicitly. The MVP operations UI exposes required feeds; custom optional endpoints are operator-configured. External enrichment failures are independent jobs and do not halt unrelated processing.
 
@@ -56,23 +56,23 @@ The instance must be reachable over HTTPS on an approved DNS name. Private IP ad
 
 ## Licence records
 
-Each source row in D1 records `license`, `redistributable` and `commercial_use` (migration `0034`). `commercial_use` is 1 when the provider's terms permit commercial use, 0 when commercial use needs a separate agreement, and `NULL` when unknown or operator-defined. [`POST /v1/lookup`](api.md#bulk-lookup) returns these with every fact, and the entity and catalogue APIs return them in [`source_licences`](api.md#source-licences-on-entity-apis). They were set from the providers' published terms in October 2026. Review them before commercial distribution; they do not replace legal review.
+Each source row in D1 records `license`, `redistributable` and `commercial_use` (migration `0034`). `commercial_use` is 1 when the provider's terms permit commercial use, 0 when commercial use needs a separate agreement, and `NULL` when unknown or operator-defined. [`POST /v1/lookup`](api.md#bulk-lookup) returns these with every fact, and the entity and catalogue APIs return them in [`source_licences`](api.md#source-licences-on-entity-apis). `commercial_use` was set from the providers' published terms in October 2026. `redistributable` is 1 for every feed (migration `0037`) because this project is non-commercial and shares its feeds openly; it is 0 only for tenant-private sources. The flags describe this deployment's choice, not a grant from the provider: VirusTotal's public API, the GreyNoise Community API and the free CrowdSec CTI key restrict passing data on regardless of commercial status, so leave those keys unset, or exclude the sources per tenant, if that matters to you. They do not replace legal review.
 
-| Source | Redistributable | Commercial use | Basis |
-| --- | --- | --- | --- |
-| MITRE ATT&CK | yes | yes | ATT&CK Terms of Use: royalty-free licence with attribution |
-| MISP Galaxy | no | yes | Collection licences are CC0, BSD-2-Clause or CC BY-SA 4.0; redistribution stays off for share-alike review |
-| ThreatFox, URLhaus, Feodo | no | no | abuse.ch fair use; commercial use needs an abuse.ch/Spamhaus agreement |
-| CISA KEV | yes | yes | US government data, CC0 |
-| IPtoASN | yes | yes | Public Domain Dedication and License (PDDL) 1.0, stated on iptoasn.com |
-| FIRST EPSS | yes | yes | Published freely by FIRST; cite FIRST and EPSS |
-| NVD | yes | yes | US government data; products must state "This product uses the NVD API but is not endorsed or certified by the NVD" |
-| OSV | yes | unknown | OSV.dev aggregates many databases under their own licences (mostly CC-BY 4.0); check the record's source |
-| GreyNoise | no | no | Community API terms: free tier, 50 lookups per week; commercial use needs a paid licence |
-| CrowdSec CTI | no | no | CTI API terms; commercial use needs the CrowdSec partnership programme |
-| VirusTotal | no | no | Public API terms prohibit commercial use |
-| OTX, TAXII, STIX, MISP feed, Yeti | no | unknown | Account or operator terms |
-| Customer, analyst, upload | no | unknown | Tenant-private |
+| Source                            | Redistributable | Commercial use | Basis                                                                                                                               |
+| --------------------------------- | --------------- | -------------- | ----------------------------------------------------------------------------------------------------------------------------------- |
+| MITRE ATT&CK                      | yes             | yes            | ATT&CK Terms of Use: royalty-free licence with attribution                                                                          |
+| MISP Galaxy                       | yes             | yes            | Collection licences are CC0, BSD-2-Clause or CC BY-SA 4.0; share-alike collections need attribution and the same licence downstream |
+| ThreatFox, URLhaus, Feodo         | yes             | no             | abuse.ch fair use; commercial use needs an abuse.ch/Spamhaus agreement                                                              |
+| CISA KEV                          | yes             | yes            | US government data, CC0                                                                                                             |
+| IPtoASN                           | yes             | yes            | Public Domain Dedication and License (PDDL) 1.0, stated on iptoasn.com                                                              |
+| FIRST EPSS                        | yes             | yes            | Published freely by FIRST; cite FIRST and EPSS                                                                                      |
+| NVD                               | yes             | yes            | US government data; products must state "This product uses the NVD API but is not endorsed or certified by the NVD"                 |
+| OSV                               | yes             | unknown        | OSV.dev aggregates many databases under their own licences (mostly CC-BY 4.0); check the record's source                            |
+| GreyNoise                         | yes             | no             | Community API terms: free tier, 50 lookups per week; commercial use needs a paid licence                                            |
+| CrowdSec CTI                      | yes             | no             | CTI API terms; commercial use needs the CrowdSec partnership programme                                                              |
+| VirusTotal                        | yes             | no             | Public API terms prohibit commercial use                                                                                            |
+| OTX, TAXII, STIX, MISP feed, Yeti | yes             | unknown        | Account or operator terms                                                                                                           |
+| Customer, analyst, upload         | no              | unknown        | Tenant-private                                                                                                                      |
 
 ## IPtoASN
 
@@ -100,7 +100,7 @@ Both are lookup-only sources. They are never bulk-synced (`POST /v1/feeds/:id/sy
 
 Answers are normalised by the existing adapters in `optional-feeds.ts` and stored only in `source_lookup_cache`, partitioned by tenant. They never enter the shared graph, and a tenant never sees another tenant's answers, lookup times or pending state. The same address looked up by two tenants costs two provider calls.
 
-**Licence.** The GreyNoise Community API and the free CrowdSec CTI key are for non-commercial use. Every answer is labelled `commercial_use: false` and `redistributable: false`, but labels do not change the terms: serving these answers to customers of a commercial service needs a commercial GreyNoise licence or CrowdSec partnership. Provision the keys only where that is settled, and exclude the sources per tenant (`PUT /v1/feeds/:id/policy`) for tenants that must not receive them.
+**Licence.** The GreyNoise Community API and the free CrowdSec CTI key are for non-commercial use. Every answer is labelled `commercial_use: false` and, like every feed in this non-commercial deployment, `redistributable: true`, but labels do not change the terms: serving these answers to customers of a commercial service needs a commercial GreyNoise licence or CrowdSec partnership. Provision the keys only where that is settled, and exclude the sources per tenant (`PUT /v1/feeds/:id/policy`) for tenants that must not receive them.
 
 - GreyNoise `noise` (seen scanning the internet in the last 90 days) sets `scanner.is_scanner`. `riot` (a known business service) or a `benign` classification sets `scanner.benign_service`. Classification `malicious` is a malicious assertion; RIOT is a benign one.
 - CrowdSec `scanner:*` classifications or `*scan*` behaviours set `is_scanner`. False-positive classifications (CDNs, crawlers) or a `benign`/`safe` reputation set `benign_service`. Reputation `malicious` is a malicious assertion. Behaviour and classification names become tags.

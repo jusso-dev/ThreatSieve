@@ -46,6 +46,8 @@ Migration `0034_foiled_lookup_hub.sql` adds `sources.commercial_use`, the `iptoa
 
 Migration `0036_structured_ingest.sql` adds `ingest_items`, `ingest_batches`, `ingest_requests`, `ingest_metrics` and the nullable `api_keys.ingest_sources` column for the [ingest API](ingest.md). It is additive; apply it before deploying the Worker that serves `POST /v1/ingest`. Batches run on the existing `intel-ingest` queue and R2 `ARCHIVE` bucket. Optional value: `INGEST_RATE_LIMIT` (requests per minute per key, default 60). Existing keys gain no new scopes; issue keys with `ingest:write`/`ingest:read` for integrations.
 
+Migration `0037_open_feed_redistribution.sql` marks every feed source and its stored entities, evidence, relationships and source assertions redistributable. Tenant-private sources (`customer`, `analyst`, `upload`) are unchanged. It rewrites JSON in place on matching rows only. Assessments created before it keep their original source flags until they are reclassified.
+
 Refresh enabled optional feeds following release so previously stored observations reflect the corrected source-date policy.
 
 The 16 October 2026 cost repair applied migrations 0019–0021 and 0027 to staging, which had stopped at 0018. The same live feed-polling query fell from 493,652 rows read to two, and both outbox updates now use `outbox_dispatch_token`. Production already had migration 0021. Staging migrations 0022 and 0024–0026 were not applied as part of the index repair; apply and review those separately before deploying application code that depends on them. The full staging migration set includes a cluster-table rebuild, so do not treat a blanket migration apply as an index-only repair.

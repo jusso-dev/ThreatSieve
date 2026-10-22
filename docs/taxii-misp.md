@@ -49,7 +49,7 @@ The `TAXII_*` values configure one source (`taxii`), which the production deploy
     "page_limit": 100,
     "schedule": "6h",
     "license": "Foiled honeypot intelligence, operator terms",
-    "redistributable": false,
+    "redistributable": true,
     "commercial_use": null
   }
 ]
@@ -60,7 +60,7 @@ The `TAXII_*` values configure one source (`taxii`), which the production deploy
 - `api_key_secret` names the Worker secret holding the bearer token, and must look like `TAXII_<NAME>_API_KEY` or `TAXII_<NAME>_TOKEN`. Provision it with `wrangler secret put`. If it is named but missing, the source stays disabled.
 - `tlp` is the allow-list of TLP markings to import: `clear` (or `white`), `green`, `amber`, `amber+strict`, `red`, `unmarked`. Default `["clear","green"]`. ThreatSieve recognises the standard STIX 2.1 TLP 1.0 and TLP 2.0 marking-definition IDs in `object_marking_refs`; an object takes its most restrictive TLP marking, and objects with no recognised TLP marking count as `unmarked`. Objects outside the list are skipped, not imported. The original `taxii` slot does not filter markings.
 - `schedule` is `6h` (each six-hourly run), `daily` (at most once in 20 hours) or `manual` (Sync now only).
-- Imported records are always stored as non-redistributable, with the STIX `created_by_ref` as their original producer.
+- `redistributable` defaults to `true`, as for every feed in this non-commercial deployment. Set it to `false` to keep a partner's records out of TAXII publication, exports and packages. Imported records keep the STIX `created_by_ref` as their original producer.
 
 Invalid entries are skipped and logged, never partially applied.
 

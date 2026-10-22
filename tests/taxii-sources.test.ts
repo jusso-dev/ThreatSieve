@@ -45,6 +45,8 @@ const sources = [
     tlp: ["white", "green", "amber", "unmarked"],
     page_limit: 50,
     schedule: "daily",
+    // Operators can still keep a partner feed out of exports.
+    redistributable: false,
   },
   {
     id: "not-taxii",
@@ -103,7 +105,7 @@ it("runs two configured TAXII sources beside the original slot", async () => {
       id: "taxii",
       independent_group: "taxii",
       license: "Provider terms",
-      redistributable: 0,
+      redistributable: 1,
       commercial_use: null,
       enabled: 0,
     },
@@ -111,7 +113,7 @@ it("runs two configured TAXII sources beside the original slot", async () => {
       id: "taxii-foiled",
       independent_group: "taxii-foiled",
       license: "Foiled honeypot intelligence, operator terms",
-      redistributable: 0,
+      redistributable: 1,
       commercial_use: null,
       enabled: 1,
     },
@@ -145,7 +147,7 @@ it("runs two configured TAXII sources beside the original slot", async () => {
         imported[id]!.push(r.observable!.value);
         expect(r.provenance).toMatchObject({
           sourceId: id,
-          redistributable: false,
+          redistributable: id !== "taxii-partner",
           originalSourceId: "identity--11111111-1111-4111-8111-111111111111",
         });
       }

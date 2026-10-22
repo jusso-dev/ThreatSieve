@@ -39,7 +39,7 @@ export const TaxiiSourceConfig = z.object({
   page_limit: z.number().int().min(1).max(1000).default(100),
   schedule: z.enum(["6h", "daily", "manual"]).default("6h"),
   license: z.string().min(1).max(200).default("Provider terms"),
-  redistributable: z.boolean().default(false),
+  redistributable: z.boolean().default(true),
   commercial_use: z.boolean().nullable().default(null),
 });
 export type TaxiiSourceConfig = z.infer<typeof TaxiiSourceConfig>;

@@ -96,6 +96,7 @@ export function getFeed(env: AppEnv, id: string) {
         apiKey,
         pageLimit: config.page_limit,
         tlp: config.tlp,
+        redistributable: config.redistributable,
       },
     );
   }

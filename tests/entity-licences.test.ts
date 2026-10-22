@@ -214,9 +214,9 @@ describe("per-source licences on entity APIs", () => {
     const campaign = byId(
       campaigns.find((e) => e.id === "campaign--licence")!.source_licences,
     );
-    // OTX has no recorded commercial-use terms.
+    // OTX has no recorded commercial-use terms; every feed is redistributable.
     expect(campaign.get("otx")).toMatchObject({
-      redistributable: false,
+      redistributable: true,
       commercial_use: null,
     });
     const techniques = (await get("/v1/attack/techniques")).data as Array<

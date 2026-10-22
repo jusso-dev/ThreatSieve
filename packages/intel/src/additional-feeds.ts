@@ -430,6 +430,6 @@ export function providerProvenance(id: string, name: string): SourceProvenance {
     sourceId: id,
     sourceName: name,
     retrievedAt: new Date().toISOString(),
-    redistributable: false,
+    redistributable: true,
   };
 }
