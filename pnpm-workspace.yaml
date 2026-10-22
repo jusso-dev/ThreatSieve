@@ -7,6 +7,8 @@ overrides:
   "sharp@<0.35.5": "0.35.5"
   # GHSA-5j98-mcp5-4vw2: patch the OpenNext build tool's glob CLI.
   "glob@>=10.2.0 <10.5.0": "10.5.0"
+  # GHSA-587h-7wmj-h5pm: patch the test runner's indirect launch-editor path.
+  "vite@>=7.0.0 <7.3.7": "7.3.7"
 onlyBuiltDependencies:
   - esbuild
   - sharp
