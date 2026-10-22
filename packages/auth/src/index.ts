@@ -21,12 +21,13 @@ export async function authenticate(
     tenant_id: string;
     user_id: string;
     scopes: string;
+    ingest_sources: string | null;
   } | null;
   let kind: Principal["kind"] = "key";
   if (token) {
     row = await db
       .prepare(
-        "SELECT id,tenant_id,user_id,scopes FROM api_keys WHERE hash=? AND revoked_at IS NULL AND (expires_at IS NULL OR expires_at>?)",
+        "SELECT id,tenant_id,user_id,scopes,ingest_sources FROM api_keys WHERE hash=? AND revoked_at IS NULL AND (expires_at IS NULL OR expires_at>?)",
       )
       .bind(await digest(token), new Date().toISOString())
       .first();
@@ -34,7 +35,7 @@ export async function authenticate(
     kind = "session";
     row = await db
       .prepare(
-        "SELECT k.id,s.tenant_id,s.user_id,k.scopes FROM sessions s JOIN api_keys k ON k.id=s.key_id WHERE s.hash=? AND s.expires_at>? AND k.revoked_at IS NULL AND (k.expires_at IS NULL OR k.expires_at>?)",
+        "SELECT k.id,s.tenant_id,s.user_id,k.scopes,k.ingest_sources FROM sessions s JOIN api_keys k ON k.id=s.key_id WHERE s.hash=? AND s.expires_at>? AND k.revoked_at IS NULL AND (k.expires_at IS NULL OR k.expires_at>?)",
       )
       .bind(
         await digest(cookie!),
@@ -59,6 +60,13 @@ export async function authenticate(
     keyId: row.id,
     scopes: z.array(Scopes).parse(JSON.parse(row.scopes)),
     kind,
+    ...(row.ingest_sources
+      ? {
+          ingestSources: z
+            .array(z.string())
+            .parse(JSON.parse(row.ingest_sources)),
+        }
+      : {}),
   };
 }
 export function authorize(principal: Principal, scope: Scope) {
@@ -99,9 +107,19 @@ export async function createApiKey(
   name: string,
   scopes: Scope[],
   expiresAt?: string,
+  ingestSources?: string[],
 ) {
   if (scopes.some((s) => !p.scopes.includes("admin") && !p.scopes.includes(s)))
     throw new AppError("FORBIDDEN", 403, "Cannot grant scopes you do not hold");
+  if (
+    p.ingestSources &&
+    (!ingestSources || ingestSources.some((s) => !p.ingestSources!.includes(s)))
+  )
+    throw new AppError(
+      "FORBIDDEN",
+      403,
+      "Cannot grant ingest sources you do not hold",
+    );
   const token =
     "ts_" +
     Array.from(crypto.getRandomValues(new Uint8Array(32)), (v) =>
@@ -110,7 +128,7 @@ export async function createApiKey(
   const id = crypto.randomUUID();
   await db
     .prepare(
-      "INSERT INTO api_keys(id,tenant_id,user_id,name,hash,scopes,created_at,expires_at) VALUES(?,?,?,?,?,?,?,?)",
+      "INSERT INTO api_keys(id,tenant_id,user_id,name,hash,scopes,created_at,expires_at,ingest_sources) VALUES(?,?,?,?,?,?,?,?,?)",
     )
     .bind(
       id,
@@ -121,7 +139,15 @@ export async function createApiKey(
       JSON.stringify(scopes),
       new Date().toISOString(),
       expiresAt ?? null,
+      ingestSources ? JSON.stringify(ingestSources) : null,
     )
     .run();
-  return { id, key: token, name, scopes, expires_at: expiresAt ?? null };
+  return {
+    id,
+    key: token,
+    name,
+    scopes,
+    expires_at: expiresAt ?? null,
+    ...(ingestSources ? { ingest_sources: ingestSources } : {}),
+  };
 }

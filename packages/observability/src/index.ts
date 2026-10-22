@@ -7,6 +7,13 @@ export function log(event: {
   duration_ms?: number;
   result: string;
   error_type?: string;
+  format?: string;
+  items_received?: number;
+  items_accepted?: number;
+  items_rejected?: number;
+  items_deduplicated?: number;
+  items_created?: number;
+  items_updated?: number;
 }) {
   console.log(
     JSON.stringify({ ...event, timestamp: new Date().toISOString() }),
@@ -16,7 +23,19 @@ export class AppError extends Error {
   constructor(
     public code: string,
     public status:
-      400 | 401 | 403 | 404 | 406 | 409 | 413 | 422 | 429 | 500 | 502 | 503,
+      | 400
+      | 401
+      | 403
+      | 404
+      | 406
+      | 409
+      | 413
+      | 415
+      | 422
+      | 429
+      | 500
+      | 502
+      | 503,
     message: string,
   ) {
     super(message);

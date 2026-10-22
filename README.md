@@ -59,9 +59,86 @@ Sync MITRE first, then MISP, then indicator feeds so canonical knowledge is avai
 - STIX 2.1 export and a Python OpenCTI connector using `OpenCTIConnectorHelper.send_stix2_bundle`.
 - Optional provider adapters for OTX, VirusTotal, GreyNoise, TAXII, STIX, MISP and [Yeti](docs/intelligence-sources.md#yeti); disabled unless explicitly configured.
 - [Bulk lookup](docs/api.md#bulk-lookup) for integrations such as [Foiled](docs/foiled.md): reputation, scanner classification, IP-to-ASN network context (IPtoASN), CVE context (NVD, FIRST EPSS, CISA KEV, OSV) and per-fact licence provenance, without model calls.
+- [Ingest API](#ingest-api) for structured alerts and advisories in native JSON, STIX 2.1, CSAF 2.0 and OSV, with per-item validation, deduplication and TLP-aware tenant isolation.
 - Offline evaluation metrics and browser/integration/security tests.
 
 [Analyst workflows and boundaries](docs/intelligence-operations.md) · [Automation](docs/automation.md) · [TAXII and MISP](docs/taxii-misp.md) · [Enterprise architecture](docs/enterprise-upgrade.md)
+
+## Ingest API
+
+`POST /v1/ingest` accepts structured security alerts and advisories as native JSON, STIX 2.1 bundles, CSAF 2.0 documents or OSV records, maps every format into one schema, and stores the result per tenant. `GET /v1/ingest/{id}` returns a stored item with its normalisation record and the original payload. Through the web app the routes are `/api/v1/ingest` and `/api/v1/ingest/{id}`. The OpenAPI 3.1 spec is served at `GET /openapi/ingest.json` and committed as [docs/openapi/ingest.json](docs/openapi/ingest.json).
+
+Create a key with the `ingest:write` scope (add `ingest:read` to fetch items). Optionally pin it to sources with `"ingestSources": ["EDR"]`:
+
+```sh
+curl -X POST http://127.0.0.1:8787/v1/api-keys \
+  -H "Authorization: Bearer $THREATSIEVE_ADMIN_KEY" -H 'Content-Type: application/json' \
+  -d '{"name":"EDR push","scopes":["ingest:write","ingest:read"],"ingestSources":["EDR"]}'
+```
+
+Native alert (one item; stored synchronously, `201` when created, `200` when it matched an existing item):
+
+```sh
+curl -X POST http://127.0.0.1:8787/v1/ingest \
+  -H "Authorization: Bearer $THREATSIEVE_API_KEY" -H 'Content-Type: application/json' \
+  -H 'Idempotency-Key: edr-4711-v1' \
+  -d '{
+    "type": "alert",
+    "external_id": "4711",
+    "title": "Beacon to known C2",
+    "severity": "high",
+    "source": {"name": "EDR", "vendor": "Example EDR", "url": "https://edr.example/alerts/4711"},
+    "published_at": "2026-10-01T04:00:00Z",
+    "indicators": [{"type": "domain", "value": "c2[.]evil.example", "confidence": 90}],
+    "attack_techniques": ["T1071.001"],
+    "tlp": "amber",
+    "raw": {"vendor_payload": "kept as-is"}
+  }'
+```
+
+Native batch (an array, or `{"items": [...]}`; valid items are queued and invalid ones reported per item with `202`):
+
+```sh
+curl -X POST http://127.0.0.1:8787/v1/ingest \
+  -H "Authorization: Bearer $THREATSIEVE_API_KEY" -H 'Content-Type: application/json' \
+  -d '[{"type":"advisory","external_id":"ADV-1","title":"Patch now","vendor_severity":"Important","source":{"name":"Vendor PSIRT"},"cve_ids":["cve-2024-3094"]},
+       {"type":"alert","title":"missing source"}]'
+curl http://127.0.0.1:8787/v1/ingest/inb_... -H "Authorization: Bearer $THREATSIEVE_API_KEY"
+```
+
+STIX 2.1 bundle (always a batch):
+
+```sh
+curl -X POST http://127.0.0.1:8787/v1/ingest \
+  -H "Authorization: Bearer $THREATSIEVE_API_KEY" -H 'Content-Type: application/stix+json;version=2.1' \
+  --data-binary @tests/fixtures/ingest/stix-poisonivy.json
+```
+
+CSAF 2.0 advisory (one document is stored synchronously; an array is a batch):
+
+```sh
+curl -X POST http://127.0.0.1:8787/v1/ingest \
+  -H "Authorization: Bearer $THREATSIEVE_API_KEY" -H 'Content-Type: application/csaf+json' \
+  --data-binary @tests/fixtures/ingest/csaf-rhsa-2021_5217.json
+```
+
+OSV record:
+
+```sh
+curl -X POST http://127.0.0.1:8787/v1/ingest \
+  -H "Authorization: Bearer $THREATSIEVE_API_KEY" -H 'Content-Type: application/osv+json' \
+  --data-binary @tests/fixtures/ingest/osv-GHSA-c2qf-rxjj-qqgw.json
+```
+
+Any format inside a JSON envelope, with a TLP for unmarked items:
+
+```sh
+jq -n --slurpfile r tests/fixtures/ingest/osv-PYSEC-2023-74.json '{format:"osv", default_tlp:"clear", items:$r}' |
+  curl -X POST http://127.0.0.1:8787/v1/ingest \
+    -H "Authorization: Bearer $THREATSIEVE_API_KEY" -H 'Content-Type: application/json' --data-binary @-
+```
+
+Repeats are deduplicated on source plus external ID and update the stored item; the same `Idempotency-Key` with the same body returns the first response. Bodies are limited to 5 MiB and 500 items, and `POST /v1/ingest` has its own rate-limit bucket (`INGEST_RATE_LIMIT` per key per minute, default 60). See [ingest field and severity mapping](docs/ingest.md).
 
 ## Commands
 
@@ -73,6 +150,7 @@ Sync MITRE first, then MISP, then indicator feeds so canonical knowledge is avai
 | `pnpm test:e2e`                                       | Isolated full-stack tests using tester-army/e2e                  |
 | `pnpm lint`                                           | TypeScript/React lint checks                                     |
 | `pnpm typecheck`                                      | Strict backend and frontend types                                |
+| `pnpm openapi:ingest`                                 | Regenerate `docs/openapi/ingest.json`                            |
 | `pnpm build`                                          | Worker dry-run bundle and Next.js production build               |
 | `pnpm eval`                                           | Evaluation fixture self-check; emits `artifacts/evaluation.json` |
 | `pnpm security`                                       | Repository security checks                                       |

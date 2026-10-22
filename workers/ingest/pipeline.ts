@@ -24,6 +24,7 @@ import {
 } from "../feed-sync/index";
 import { exportAssessment } from "../export/index";
 import { processBulk } from "./upload";
+import { processIngestBatch } from "../../packages/ingest/src/service";
 import { enrichEntity } from "../enrich/index";
 import { backfillVectors } from "../enrich/backfill";
 import { correlate } from "../correlate/index";
@@ -83,6 +84,10 @@ export async function processJob(env: AppEnv, job: PipelineJob) {
     case "ingest":
       if (job.payload.mode === "feed-fanout") {
         await fanoutFeed(env, job);
+        return;
+      }
+      if (job.payload.mode === "structured-ingest") {
+        await repo.finish(job, await processIngestBatch(env, job));
         return;
       }
       await repo.finish(job, {}, next(job, "normalise"));

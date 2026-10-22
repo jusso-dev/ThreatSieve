@@ -418,6 +418,8 @@ export const Scopes = z.enum([
   "feeds:write",
   "ops:read",
   "integration:write",
+  "ingest:read",
+  "ingest:write",
   "admin",
 ]);
 export type Scope = z.infer<typeof Scopes>;
@@ -427,6 +429,8 @@ export interface Principal {
   keyId: string;
   scopes: Scope[];
   kind: "key" | "session";
+  /** API keys may be limited to submitting ingest items for these sources. */
+  ingestSources?: string[];
 }
 export interface FeedHealth {
   status: "healthy" | "error" | "disabled";

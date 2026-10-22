@@ -235,9 +235,18 @@ export const roleScopes: Record<string, Scope[]> = {
     "feeds:write",
     "ops:read",
     "integration:write",
+    "ingest:read",
+    "ingest:write",
   ],
-  analyst: ["intel:read", "assessment:read", "assessment:write", "feeds:read"],
-  viewer: ["intel:read", "assessment:read", "feeds:read"],
+  analyst: [
+    "intel:read",
+    "assessment:read",
+    "assessment:write",
+    "feeds:read",
+    "ingest:read",
+    "ingest:write",
+  ],
+  viewer: ["intel:read", "assessment:read", "feeds:read", "ingest:read"],
 };
 export async function authenticateSession(
   env: AppEnv,

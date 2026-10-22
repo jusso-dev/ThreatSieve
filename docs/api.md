@@ -31,8 +31,10 @@ curl -X POST http://127.0.0.1:8787/v1/assess \
 | `PUT /v1/environment`                                                                             | admin                |
 | `POST /v1/observations`                                                                           | assessment:write     |
 | `POST /v1/api-keys`, `DELETE /v1/api-keys/:id`, `GET /v1/ops`                                     | admin                |
+| `POST /v1/ingest` ([ingest API](ingest.md))                                                       | ingest:write         |
+| `GET /v1/ingest/:id`, `GET /v1/ingest/metrics`                                                    | ingest:read          |
 | `GET /v1/me`                                                                                      | authenticated        |
-| `GET /health`, `GET /ready`                                                                       | public, minimal data |
+| `GET /health`, `GET /ready`, `GET /openapi/ingest.json`                                           | public, minimal data |
 
 Bulk JSON takes `{ "observables": ["example.com", {"observable":"192.0.2.5","type":"ipv4"}] }`. Uploads take a raw UTF-8 body and explicit format. CSV needs `observable` (or `indicator`) and optional `type` headers. A 202 response includes the tenant-scoped job ID. Poll `/v1/jobs/:id`; stages report ingestion and classification separately. `pipeline_status` is `running`, `complete`, or `failed` across all child pages and stages; stop polling on a terminal value. `totals` counts processed and rejected inputs. Limits are 16 MiB and 100,000 items per upload.
 
@@ -161,18 +163,18 @@ curl -X POST http://127.0.0.1:8787/v1/lookup \
 
 Each result has:
 
-| Field | Meaning |
-| --- | --- |
-| `type`, `value`, `input` | Type, normalised value, and the first submitted spelling |
-| `found` | ThreatSieve holds at least one reputation, CVE or relationship fact, or a visible entity. Network context alone does not set it |
-| `entity_id` | The visible observable ID (`obs_…`), otherwise `null` |
-| `ttl_seconds` | Shortest reuse time among contributing sources; 3600 when nothing is known; at most 300 while `pending_sources` is non-empty |
-| `pending_sources` | Rate-limited sources being fetched by a queued refresh, or waiting for the next lookup because this request's per-source cap was reached. Ask again after a short wait. Sources whose daily budget is spent are not listed |
-| `reputation` | `classification` (`malicious`, `suspicious`, `benign`, `unknown`), `score` and `confidence` (0–100 `dossier-v1` heuristics, `null` when unknown), `scanner` and `tags`. `null` for CVEs and when no evidence exists |
-| `network` | `asn`, `as_org`, `prefix` (largest CIDR inside the announced range) and `country` from the IPtoASN dataset; for `asn` lookups `prefix` is `null` |
-| `cve` | NVD description, status, CVSS, CWE, references and affected products; CISA KEV listing; FIRST EPSS; OSV identifiers |
-| `relationships` | Up to 25 visible relationships: `type` in lowercase with hyphens (`indicates`, `hosted-on`), `direction`, `assertion`, `confidence` 0–100, `source_id` and the other entity with `external_ids` |
-| `sources` | Every source behind a returned fact, with `license`, `redistributable`, `commercial_use` (`null` when unknown), tenant-adjusted `reliability`, `first_seen`, `last_seen`, `retrieved_at` and `source_url` |
+| Field                    | Meaning                                                                                                                                                                                                                    |
+| ------------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `type`, `value`, `input` | Type, normalised value, and the first submitted spelling                                                                                                                                                                   |
+| `found`                  | ThreatSieve holds at least one reputation, CVE or relationship fact, or a visible entity. Network context alone does not set it                                                                                            |
+| `entity_id`              | The visible observable ID (`obs_…`), otherwise `null`                                                                                                                                                                      |
+| `ttl_seconds`            | Shortest reuse time among contributing sources; 3600 when nothing is known; at most 300 while `pending_sources` is non-empty                                                                                               |
+| `pending_sources`        | Rate-limited sources being fetched by a queued refresh, or waiting for the next lookup because this request's per-source cap was reached. Ask again after a short wait. Sources whose daily budget is spent are not listed |
+| `reputation`             | `classification` (`malicious`, `suspicious`, `benign`, `unknown`), `score` and `confidence` (0–100 `dossier-v1` heuristics, `null` when unknown), `scanner` and `tags`. `null` for CVEs and when no evidence exists        |
+| `network`                | `asn`, `as_org`, `prefix` (largest CIDR inside the announced range) and `country` from the IPtoASN dataset; for `asn` lookups `prefix` is `null`                                                                           |
+| `cve`                    | NVD description, status, CVSS, CWE, references and affected products; CISA KEV listing; FIRST EPSS; OSV identifiers                                                                                                        |
+| `relationships`          | Up to 25 visible relationships: `type` in lowercase with hyphens (`indicates`, `hosted-on`), `direction`, `assertion`, `confidence` 0–100, `source_id` and the other entity with `external_ids`                            |
+| `sources`                | Every source behind a returned fact, with `license`, `redistributable`, `commercial_use` (`null` when unknown), tenant-adjusted `reliability`, `first_seen`, `last_seen`, `retrieved_at` and `source_url`                  |
 
 Reputation classification is a fixed rule over source assertions: malicious and benign assertions together give `suspicious`; a malicious assertion gives `malicious`; a benign assertion or benign service gives `benign`; scanning activity alone gives `suspicious`. `score` and `confidence` are the [`dossier-v1`](confidence-model.md#dossier-scoring-dossier-v1) threat and confidence heuristics without customer context. Analyst assessments are not consulted. `scanner.source_id` names the first contributing scanner source, preferring GreyNoise, then CrowdSec.
 

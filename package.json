@@ -17,6 +17,7 @@
     "deploy": "tsx scripts/deploy.ts",
     "cli": "tsx scripts/cli.ts",
     "cf:types": "wrangler types",
+    "openapi:ingest": "tsx scripts/ingest-openapi.ts",
     "format": "prettier --write .",
     "bootstrap": "pnpm db:migrate && pnpm seed",
     "tenant:create": "tsx scripts/tenant.ts",
