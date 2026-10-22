@@ -204,7 +204,8 @@ it("imports MISP objects and compound attributes without inventing maliciousness
   ]);
   expect(normalized[0]!.evidence[0]!.data.mispUuid).toBe("attribute-1");
   expect(normalized[0]!.evidence[0]!.data.malicious).toBeUndefined();
-  expect(normalized[0]!.provenance.redistributable).toBe(false);
+  // Every feed is redistributable in this non-commercial deployment.
+  expect(normalized[0]!.provenance.redistributable).toBe(true);
 });
 it("preserves report and course-of-action source objects and knowledge-only evidence", async () => {
   for (const type of ["report", "course-of-action"]) {

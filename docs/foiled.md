@@ -4,9 +4,9 @@
 
 ## What Foiled calls
 
-| Route | Use |
-| --- | --- |
-| [`POST /v1/lookup`](api.md#bulk-lookup) | Reputation, scanner classification, network context, CVE context and relationships for up to 500 observables per call |
+| Route                                                                                      | Use                                                                                                                                                               |
+| ------------------------------------------------------------------------------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| [`POST /v1/lookup`](api.md#bulk-lookup)                                                    | Reputation, scanner classification, network context, CVE context and relationships for up to 500 observables per call                                             |
 | `GET /v1/actors`, `GET /v1/campaigns`, `GET /v1/attack/techniques`, `GET /v1/entities/:id` | Actor, campaign and ATT&CK catalogue with aliases, external IDs, references and per-source licences in [`source_licences`](api.md#source-licences-on-entity-apis) |
 
 All of these need only `intel:read`. Lookups never call Workers AI, never create assessments, and read only stored intelligence, imported datasets and cached source answers.
@@ -94,7 +94,7 @@ Foiled publishes its honeypot observations over TAXII 2.1. ThreatSieve imports t
        "tlp": ["clear", "green"],
        "schedule": "6h",
        "license": "Foiled honeypot intelligence, operator terms",
-       "redistributable": false,
+       "redistributable": true,
        "commercial_use": null
      }
    ]
@@ -102,4 +102,4 @@ Foiled publishes its honeypot observations over TAXII 2.1. ThreatSieve imports t
 
 5. Deploy. The `taxii-foiled` source row is created on the next feed listing, Sync now or scheduled run. Use **Sync now** (`POST /v1/feeds/taxii-foiled/sync`) or wait for the six-hourly schedule.
 
-The endpoint must be HTTPS on the approved hostname; redirects, IP literals and `.local` names are rejected. Imported records keep `redistributable: false` and Foiled's STIX `created_by_ref` as their original source, so ThreatSieve's own TAXII publication never re-exports them without an explicit decision. The source has its own `taxii-foiled` independence group, so Foiled is not double-counted with itself, and tenants can exclude it with `PUT /v1/feeds/taxii-foiled/policy`.
+The endpoint must be HTTPS on the approved hostname; redirects, IP literals and `.local` names are rejected. Imported records are redistributable, like every feed in this non-commercial deployment, so ThreatSieve's own TAXII publication re-shares them; set `"redistributable": false` to stop that. They keep Foiled's STIX `created_by_ref` as their original source. The source has its own `taxii-foiled` independence group, so Foiled is not double-counted with itself, and tenants can exclude it with `PUT /v1/feeds/taxii-foiled/policy`.

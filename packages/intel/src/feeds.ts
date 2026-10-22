@@ -389,7 +389,9 @@ export class PublicFeed implements ThreatFeedProvider {
       sourceId: this.id,
       sourceName: this.name,
       retrievedAt: new Date().toISOString(),
-      redistributable: this.id === "mitre",
+      // ThreatSieve is a non-commercial open-source deployment that shares
+      // every feed; see docs/intelligence-sources.md#licence-records.
+      redistributable: true,
       license: this.id === "mitre" ? "ATT&CK Terms of Use" : "Provider terms",
     };
   }

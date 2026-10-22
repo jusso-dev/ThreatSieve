@@ -23,6 +23,8 @@ export interface OptionalFeedConfig {
   tags?: string[];
   /** TAXII only: import objects whose TLP marking is in this list. */
   tlp?: TlpLevel[];
+  /** TAXII only: false keeps a partner's records out of exports. */
+  redistributable?: boolean;
 }
 function approvedEndpoint(config: OptionalFeedConfig): URL {
   if (!config.endpoint || !config.allowedHost)
@@ -443,7 +445,12 @@ export class OptionalFeed extends PublicFeed {
     };
   }
   override async normalize(input: unknown): Promise<NormalizedIntelRecord[]> {
-    const provenance = providerProvenance(this.id, this.name);
+    const provenance = {
+      ...providerProvenance(this.id, this.name),
+      ...(this.config.redistributable === false
+        ? { redistributable: false }
+        : {}),
+    };
     if (this.id === "stix" || this.kind === "taxii") {
       // Objects outside the source's TLP allow-list are skipped, not imported.
       if (this.config.tlp && !tlpAllowed(input, this.config.tlp)) return [];
