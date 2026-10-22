@@ -79,14 +79,18 @@ export function taxiiObjectsUrl(config: TaxiiSourceConfig) {
   const root = config.endpoint.replace(/\/+$/, "");
   return root + "/collections/" + config.collection + "/objects/";
 }
-/** Creates the source row (needed for checkpoints and locks) once. */
+/**
+ * Creates the source row (needed for checkpoints and locks) once. The
+ * configured `redistributable` setting is reapplied on every call so an
+ * explicit opt-out always wins; other row edits are kept.
+ */
 export async function ensureTaxiiSources(
   db: D1Database,
   configs: TaxiiSourceConfig[],
 ) {
   if (!configs.length) return;
   await db.batch(
-    configs.map((c) =>
+    configs.flatMap((c) => [
       db
         .prepare(
           "INSERT OR IGNORE INTO sources(id,name,independent_group,reliability,enabled,license,redistributable,commercial_use) VALUES(?,?,?,0.5,1,?,?,?)",
@@ -99,7 +103,12 @@ export async function ensureTaxiiSources(
           Number(c.redistributable),
           c.commercial_use === null ? null : Number(c.commercial_use),
         ),
-    ),
+      db
+        .prepare(
+          "UPDATE sources SET redistributable=? WHERE id=? AND redistributable!=?",
+        )
+        .bind(Number(c.redistributable), c.id, Number(c.redistributable)),
+    ]),
   );
 }
 

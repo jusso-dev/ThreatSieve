@@ -46,7 +46,7 @@ Migration `0034_foiled_lookup_hub.sql` adds `sources.commercial_use`, the `iptoa
 
 Migration `0036_structured_ingest.sql` adds `ingest_items`, `ingest_batches`, `ingest_requests`, `ingest_metrics` and the nullable `api_keys.ingest_sources` column for the [ingest API](ingest.md). It is additive; apply it before deploying the Worker that serves `POST /v1/ingest`. Batches run on the existing `intel-ingest` queue and R2 `ARCHIVE` bucket. Optional value: `INGEST_RATE_LIMIT` (requests per minute per key, default 60). Existing keys gain no new scopes; issue keys with `ingest:write`/`ingest:read` for integrations.
 
-Migration `0037_open_feed_redistribution.sql` marks every feed source and its stored entities, evidence, relationships and source assertions redistributable. Tenant-private sources (`customer`, `analyst`, `upload`) are unchanged. It rewrites JSON in place on matching rows only. Assessments created before it keep their original source flags until they are reclassified.
+Migration `0037_open_feed_redistribution.sql` marks every feed source and its stored entities, evidence, relationships and source assertions redistributable. Tenant-private sources (`customer`, `analyst`, `upload`) are unchanged. Additional TAXII sources (`taxii-*`) are also left alone, because only their `TAXII_SOURCES` entry knows whether they opted out; their rows follow that setting on the next feed listing or sync, and records imported before the release keep their stored flag. It rewrites JSON in place on matching rows only. Assessments created before it keep their original source flags until they are reclassified.
 
 Refresh enabled optional feeds following release so previously stored observations reflect the corrected source-date policy.
 

@@ -2,8 +2,12 @@ import { expect, it } from "vitest";
 import { Miniflare } from "miniflare";
 import { readdirSync, readFileSync } from "node:fs";
 import { migrationStatements } from "../packages/database/src/migrations";
+import {
+  ensureTaxiiSources,
+  TaxiiSourceConfig,
+} from "../packages/intel/src/taxii-sources";
 
-it("open-feed migration makes feed records redistributable and leaves tenant-private records private", async () => {
+it("open-feed migration makes feed records redistributable and leaves tenant-private and per-source TAXII records alone", async () => {
   const mf = new Miniflare({
     modules: true,
     script: 'export default {fetch(){return new Response("ok")}}',
@@ -28,9 +32,17 @@ it("open-feed migration makes feed records redistributable and leaves tenant-pri
         retrievedAt: at,
         redistributable: false,
       });
+    // An additional TAXII source configured before this release, possibly with
+    // an explicit opt-out that SQL cannot see.
+    await db
+      .prepare(
+        "INSERT INTO sources(id,name,independent_group,reliability,enabled,license,redistributable) VALUES('taxii-partner','Partner','taxii-partner',0.5,1,'Provider terms',0)",
+      )
+      .run();
     for (const [id, source] of [
       ["feed-entity", "threatfox"],
       ["private-entity", "customer"],
+      ["taxii-partner-entity", "taxii-partner"],
     ] as const) {
       await db
         .prepare(
@@ -98,6 +110,13 @@ it("open-feed migration makes feed records redistributable and leaves tenant-pri
         relationship: 0,
         assertion: 0,
       },
+      {
+        id: "taxii-partner-entity",
+        entity: 0,
+        evidence: 0,
+        relationship: 0,
+        assertion: 0,
+      },
     ]);
     const sources = await db
       .prepare("SELECT id FROM sources WHERE redistributable=0 ORDER BY id")
@@ -105,8 +124,29 @@ it("open-feed migration makes feed records redistributable and leaves tenant-pri
     expect(sources.results.map((s) => s.id)).toEqual([
       "analyst",
       "customer",
+      "taxii-partner",
       "upload",
     ]);
+    // The TAXII_SOURCES entry is authoritative for its row's flag.
+    await db
+      .prepare("UPDATE sources SET redistributable=1 WHERE id='taxii-partner'")
+      .run();
+    const config = (redistributable: boolean) =>
+      TaxiiSourceConfig.parse({
+        id: "taxii-partner",
+        name: "Partner",
+        endpoint: "https://partner.example.test/objects/",
+        allowed_host: "partner.example.test",
+        redistributable,
+      });
+    await ensureTaxiiSources(db, [config(false)]);
+    const flag = () =>
+      db
+        .prepare("SELECT redistributable FROM sources WHERE id='taxii-partner'")
+        .first<number>("redistributable");
+    expect(await flag()).toBe(0);
+    await ensureTaxiiSources(db, [config(true)]);
+    expect(await flag()).toBe(1);
   } finally {
     await mf.dispose();
   }
