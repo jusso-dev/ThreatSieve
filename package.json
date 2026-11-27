@@ -49,7 +49,7 @@
     "better-auth": "1.7.7",
     "csv-parse": "^7.0.3",
     "drizzle-orm": "^0.45.3",
-    "hono": "^4.10.0",
+    "hono": "^4.13.16",
     "ipaddr.js": "^2.2.0",
     "zod": "^4.1.0"
   }
